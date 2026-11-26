@@ -148,7 +148,7 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
   'asset.heldItems': {
     text: 'What the character holds, and in which hand. Left and right are from the character’s point of view.',
     examples: ['revolver in the right hand', 'shield on the left arm, sword in the right hand', 'empty hands'],
-    tip: 'Always say left or right. Otherwise the item switches hands between assets.',
+    tip: 'Always say left or right. Otherwise the item switches hands between assets. If the outfit has a holster or scabbard for it, call that one empty, or the model draws two.',
   },
   'asset.view': {
     text: 'The camera angle. Use the same view for every asset that appears together in the game.',
@@ -177,7 +177,12 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
   },
   'asset.lighting': {
     text: 'Where the light comes from and how strong it is. Keeping it the same makes assets fit together.',
-    examples: ['even and neutral, from upper left', 'warm sunset light from the right', 'cold moonlight from above, soft shadows'],
+    examples: [
+      'even and neutral, from upper left (sprites and icons)',
+      'warm sunset light from the right (backgrounds)',
+      'cold moonlight from above, soft shadows (backgrounds)',
+    ],
+    tip: 'Keep sprites even and neutral. Mood lighting gets baked in and looks wrong in other scenes, so save it for backgrounds.',
   },
   'asset.exclusions': {
     text: 'Things the model must leave out. Each one becomes part of the "Exclude" line.',

@@ -76,6 +76,9 @@ const ASSET_KEYS: Key[] = [
   'exclude',
 ]
 
+/** Lines buildPrompt adds on its own. They have no form field, so they are read and dropped. */
+const GENERATED_LABELS = new Set(['sides'])
+
 /** The blocks whose fields fill the form. Any other [BLOCK] is skipped. */
 const FORM_BLOCKS = new Set(['STYLE', 'CHARACTER', 'ASSET'])
 const LABEL_RE = /^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$/
@@ -176,6 +179,10 @@ export function parsePrompt(text: string, current: FormValues): ParseResult {
       continue
     }
     const label = LABEL_RE.exec(trimmed)
+    if (label && GENERATED_LABELS.has(label[1].toLowerCase())) {
+      currentKey = null
+      continue
+    }
     const key = label ? LABELS[label[1].toLowerCase()] : undefined
     if (label && key) {
       raw[key] = label[2].trim()

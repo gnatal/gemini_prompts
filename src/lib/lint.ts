@@ -2,15 +2,65 @@ import { usesChromaKey } from '../config/assetPresets'
 import { CHROMA_GREEN, CHROMA_MAGENTA } from '../config/defaults'
 import { IP_BLOCKLIST } from '../config/ipBlocklist'
 import type { FormValues, LintWarning } from '../types'
-import { hexDistance, isValidHex, normalizeHex } from './color'
+import { hexDistance, isValidHex, nameHexMismatch, normalizeHex } from './color'
 
 export const METAPHOR_MESSAGE = 'Describe the shape in plain geometry instead. Comparisons get exaggerated.'
 export const IP_MESSAGE =
   'Names an existing character or franchise. The model will drift toward it, and the asset may not be yours to ship.'
 export const HANDS_MESSAGE = "Say which hand, from the character's perspective."
 export const CHROMA_CLASH_DISTANCE = 100
+export const TEXT_CONFLICT_MESSAGE =
+  'This asks for written text, but Exclude says "no text", so the model gets both. Models also misspell text, and it is unreadable at sprite size. Drop it here and add it after generating, or remove "no text" and give the exact characters.'
+export const SPRITE_LIGHTING_MESSAGE =
+  'Mood lighting gets baked into the sprite, so it looks wrong in every other scene. Keep sprites even and neutral, and put the mood in the background art.'
+export const LIGHTING_CONFLICT_MESSAGE =
+  'Lighting and Lines and shading pull in opposite directions (warm vs cold). The model blends them or picks one at random. Keep one.'
+export const PROPORTIONS_MESSAGE =
+  'Give the height in heads, like "3 heads tall" for a chunky build or "7 heads tall" for a realistic one. Without a number the model picks the build itself.'
 
 const METAPHOR_RE = /\b(?:like an?|looks like|as if|resembles|similar to)\b|\b[a-z]+-shaped\b/i
+
+const QUOTED_RE = /["“][^"”]+["”]/
+const TEXT_WORDS_RE = /\b(?:kanji|lettering|letters|words?|phrase|inscription|inscribed|written|writing|slogan|caption|text)\b/i
+const NO_TEXT_RE = /\btext\b/i
+
+const WARM_RE = /\b(?:warm|sunny|sunlit|sunlight|sunset|sunrise|golden hour|daylight|midday|noon)\b/i
+const COLD_RE = /\b(?:cold|moonlight|moonlit|night|nighttime|icy|frosty)\b/i
+const MOOD_LIGHT_RE =
+  /\b(?:moonlight|moonlit|sunset|sunrise|golden hour|dramatic|rim[- ]?light|backlit|backlight|spotlight|candlelight|torchlight|firelight|neon|night)\b/i
+
+const PROPORTIONS_RE =
+  /\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine)(?:\s+and\s+a\s+half)?\s*-?\s*heads?\s*(?:tall|high)\b/i
+
+/** Gear that gets drawn twice when it is both held and part of the outfit. */
+const GEAR: [name: string, re: RegExp][] = [
+  ['gun', /\b(?:guns?|pistols?|revolvers?|muskets?|rifles?|shotguns?|blasters?|firearms?|flintlocks?)\b/i],
+  ['blade', /\b(?:knife|knives|daggers?|swords?|cutlass(?:es)?|katanas?|sabers?|sabres?|blades?|machetes?)\b/i],
+]
+const CLAUSE_SPLIT_RE = /[,;.]|\band\b/i
+
+type Temperature = 'warm' | 'cold' | 'both' | null
+
+function temperature(text: string | undefined): Temperature {
+  const warm = WARM_RE.test(text ?? '')
+  const cold = COLD_RE.test(text ?? '')
+  return warm && cold ? 'both' : warm ? 'warm' : cold ? 'cold' : null
+}
+
+/** True when the text asks for something written: a quoted phrase, or words like "kanji" or "lettering". */
+export function asksForText(text: string): boolean {
+  return QUOTED_RE.test(text) || TEXT_WORDS_RE.test(text)
+}
+
+/** The gear families in `text` that are not marked as empty (an empty holster is fine). */
+function gearIn(text: string): Set<string> {
+  const found = new Set<string>()
+  for (const clause of text.split(CLAUSE_SPLIT_RE)) {
+    if (/\bempty\b/i.test(clause)) continue
+    for (const [name, re] of GEAR) if (re.test(clause)) found.add(name)
+  }
+  return found
+}
 
 const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '')
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -126,6 +176,68 @@ export function lint(values: FormValues, options: LintOptions = {}): LintWarning
   // 7. Ambiguous hands
   if (withCharacter && asset.heldItems?.trim() && !/\b(?:left|right)\b/i.test(asset.heldItems)) {
     warnings.push({ rule: 'ambiguous-hands', field: 'asset.heldItems', message: HANDS_MESSAGE })
+  }
+
+  // 8. Palette name says one color, hex says another
+  style.palette.forEach((c, i) => {
+    const actual = nameHexMismatch(c.name, c.hex)
+    if (actual) {
+      warnings.push({
+        rule: 'palette-name-mismatch',
+        field: `style.palette.${i}.name`,
+        message: `“${c.name.trim()}” is named one color, but ${normalizeHex(c.hex)} is ${actual}. The model gets both and mixes them up. Fix the name or the hex.`,
+      })
+    }
+  })
+
+  // 9. Asks for text while excluding text
+  if (asset.exclusions.some((e) => NO_TEXT_RE.test(e))) {
+    const describing = texts.filter(([field]) => field.startsWith('character.') || field === 'asset.heldItems' || field === 'asset.subject')
+    for (const [field, value] of describing) {
+      if (value?.trim() && field !== 'character.name' && asksForText(value)) {
+        warnings.push({ rule: 'text-conflict', field, message: TEXT_CONFLICT_MESSAGE })
+      }
+    }
+  }
+
+  // 10. Mood lighting on a sprite, 11. warm vs cold lighting
+  const moodySprite = usesChromaKey(asset.type) && MOOD_LIGHT_RE.test(asset.lighting)
+  if (moodySprite) {
+    warnings.push({ rule: 'sprite-lighting', field: 'asset.lighting', message: SPRITE_LIGHTING_MESSAGE })
+  }
+  const shadingTemp = temperature(style.linesAndShading)
+  const lightingTemp = temperature(asset.lighting)
+  const opposite =
+    (shadingTemp === 'warm' && lightingTemp === 'cold') || (shadingTemp === 'cold' && lightingTemp === 'warm')
+  if (opposite && !moodySprite) {
+    warnings.push({ rule: 'lighting-conflict', field: 'asset.lighting', message: LIGHTING_CONFLICT_MESSAGE })
+  }
+
+  // 12. The same kind of gear held and worn, which gets drawn twice
+  if (withCharacter && asset.heldItems?.trim()) {
+    const held = gearIn(asset.heldItems)
+    const outfit: [string, string][] = [
+      ['character.head', character.head],
+      ['character.torso', character.torso],
+      ['character.armsAndHands', character.armsAndHands],
+      ['character.legsAndFeet', character.legsAndFeet],
+      ...character.signatureDetails.map((d, i): [string, string] => [`character.signatureDetails.${i}`, d]),
+    ]
+    for (const [field, value] of outfit) {
+      for (const gear of gearIn(value)) {
+        if (!held.has(gear)) continue
+        warnings.push({
+          rule: 'duplicate-gear',
+          field,
+          message: `Held items already has a ${gear}, and this field describes one too, so the model may draw two. If it's worn gear, call it an empty holster or scabbard; otherwise describe it in one place only.`,
+        })
+      }
+    }
+  }
+
+  // 13. Proportions without a height in heads
+  if (withCharacter && character.proportions.trim() && !PROPORTIONS_RE.test(character.proportions)) {
+    warnings.push({ rule: 'proportions-heads', field: 'character.proportions', message: PROPORTIONS_MESSAGE })
   }
 
   return warnings

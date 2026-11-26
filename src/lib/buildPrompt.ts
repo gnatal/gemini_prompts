@@ -6,6 +6,27 @@ import { normalizeHex } from './color'
 export const REFERENCE_IMAGE_LINE =
   'Use the attached reference image as the exact design of the character. Keep every detail identical.'
 
+/**
+ * Image models read "left" and "right" from the viewer's side for some details and the
+ * character's side for others, even within one image. Pinning the convention fixes that.
+ */
+export const SIDES_LINE = "left and right always mean the character's own left and right, not the viewer's"
+
+const SIDE_WORD_RE = /\b(?:left|right)\b/i
+
+/** True when the character description or held items place something on a left or right side. */
+export function mentionsSides(character: CharacterData, asset: AssetRequest): boolean {
+  const texts = [
+    character.head,
+    character.torso,
+    character.armsAndHands,
+    character.legsAndFeet,
+    ...character.signatureDetails,
+    asset.heldItems,
+  ]
+  return texts.some((t) => SIDE_WORD_RE.test(t ?? ''))
+}
+
 type Line = [label: string, value: string | undefined]
 
 const clean = (s: string | undefined) => (s ?? '').trim()
@@ -42,7 +63,7 @@ export function buildStyleBlock(style: StyleData): string | null {
   ])
 }
 
-export function buildCharacterBlock(character: CharacterData): string | null {
+export function buildCharacterBlock(character: CharacterData, options: { sides?: boolean } = {}): string | null {
   return renderBlock('[CHARACTER]', [
     ['Name', character.name],
     ['Proportions', character.proportions],
@@ -51,6 +72,7 @@ export function buildCharacterBlock(character: CharacterData): string | null {
     ['Arms and hands', character.armsAndHands],
     ['Legs and feet', character.legsAndFeet],
     ['Signature details', nonEmpty(character.signatureDetails).join('; ')],
+    ['Sides', options.sides ? SIDES_LINE : undefined],
   ])
 }
 
@@ -96,7 +118,7 @@ export function buildPrompt(style: StyleData, character: CharacterData | null, a
   const parts = [
     withCharacter && character.hasReferenceImage ? REFERENCE_IMAGE_LINE : null,
     buildStyleBlock(style),
-    withCharacter ? buildCharacterBlock(character) : null,
+    withCharacter ? buildCharacterBlock(character, { sides: mentionsSides(character, asset) }) : null,
     buildAssetBlock(asset),
   ]
   return parts.filter((p): p is string => p !== null).join('\n\n')

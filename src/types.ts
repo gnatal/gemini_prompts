@@ -84,6 +84,12 @@ export interface LintWarning {
     | 'chroma-clash'
     | 'missing-no-text'
     | 'ambiguous-hands'
+    | 'palette-name-mismatch'
+    | 'text-conflict'
+    | 'sprite-lighting'
+    | 'lighting-conflict'
+    | 'duplicate-gear'
+    | 'proportions-heads'
   /** Form field path, e.g. "character.head" or "style.palette.2.usage". */
   field: string
   message: string

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyAssetPreset } from '../config/assetPresets'
 import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
-import { buildPrompt, REFERENCE_IMAGE_LINE } from './buildPrompt'
+import { buildPrompt, REFERENCE_IMAGE_LINE, SIDES_LINE } from './buildPrompt'
 
 describe('buildPrompt', () => {
   it('builds the full prompt in a stable field order', () => {
@@ -77,5 +77,31 @@ describe('buildPrompt', () => {
   it('normalizes hex colors', () => {
     const style = { ...cleanStyle(), palette: [{ name: 'Red', hex: 'f00', usage: '' }] }
     expect(buildPrompt(style, null, cleanAsset())).toContain('Palette: Red #FF0000\n')
+  })
+
+  describe('sides', () => {
+    it("pins left and right to the character's own sides when a field uses them", () => {
+      const prompt = buildPrompt(cleanStyle(), cleanCharacter(), cleanAsset())
+      expect(prompt).toContain(`Signature details: red scarf trailing behind; brass star on the belt buckle; fin on the helmet\nSides: ${SIDES_LINE}\n\n[ASSET]`)
+    })
+
+    it('also checks the character fields, not just held items', () => {
+      const character = { ...cleanCharacter(), head: 'thin scar over the left eye' }
+      expect(buildPrompt(cleanStyle(), character, cleanAsset({ heldItems: 'a lantern' }))).toContain(`Sides: ${SIDES_LINE}`)
+    })
+
+    it('leaves the line out when nothing mentions a side', () => {
+      expect(buildPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ heldItems: 'a lantern' }))).not.toContain('Sides:')
+    })
+
+    it('ignores side words in the view and action, which are about direction, not the body', () => {
+      const asset = cleanAsset({ heldItems: '', view: 'side-left', action: 'turning right' })
+      expect(buildPrompt(cleanStyle(), cleanCharacter(), asset)).not.toContain('Sides:')
+    })
+
+    it('leaves the line out when the character is not in the asset', () => {
+      const asset = applyAssetPreset(cleanAsset({ subject: 'a brass revolver' }), 'item-icon')
+      expect(buildPrompt(cleanStyle(), cleanCharacter(), asset)).not.toContain('Sides:')
+    })
   })
 })

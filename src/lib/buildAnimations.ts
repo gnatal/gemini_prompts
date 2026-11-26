@@ -6,6 +6,7 @@ import {
   isValidFrameCount,
   stripFraming,
 } from '../config/assetPresets'
+import { VIEW_LABELS } from '../config/labels'
 import type { AnimationSpec, AssetRequest, CharacterData, FrameLayout, StyleData, View } from '../types'
 import { buildPrompt } from './buildPrompt'
 
@@ -20,11 +21,29 @@ const CONSISTENCY_LINE =
   'identical character design, size, colors and lighting in every frame; only the pose changes'
 
 const NEAR_FAR_RE = /\b(near|far)\b/i
+/** Identical boots and sleeves give the model nothing to tell the legs apart by, so it copies one stride. */
+const FAR_SHADING = 'the far arm and far leg are drawn noticeably darker, in shadow, so near and far limbs are easy to tell apart'
+const PROPS_SUFFIX = 'in every frame; nothing appears, disappears or changes hands'
 
 /** Which side of the character faces the camera, for views where that is fixed. */
 const NEAR_SIDE: Partial<Record<View, string>> = {
   'side-right': "the character's right side",
   'side-left': "the character's left side",
+}
+
+/**
+ * Without it, poses with no direction in them ("standing", "leans back") come out in
+ * the model's default front view, so the character spins toward the camera mid-animation.
+ */
+export function viewLockLine(view: View): string {
+  const turn = isSideView(view) ? '; the character never turns toward the camera' : ''
+  return `View lock: ${VIEW_LABELS[view].toLowerCase()}, in every frame, including the first and the last${turn}`
+}
+
+/** Keeps weapons and tools from popping in and out or switching hands between frames. */
+export function propsLine(heldItems: string | undefined): string | null {
+  const items = heldItems?.trim().replace(/[.;,]+$/, '')
+  return items ? `Props: ${items}, ${PROPS_SUFFIX}` : null
 }
 
 /** The key poses, trimmed, or [] when their count doesn't match the frame count. */
@@ -56,11 +75,22 @@ function limbsLine(spec: AnimationSpec, view: View): string | null {
   const side = NEAR_SIDE[view]
   return (
     'Limbs: "near" means the arm or leg closer to the camera, "far" the one farther away' +
-    (side ? `; near is ${side}` : '')
+    (side ? `; near is ${side}` : '') +
+    `; ${FAR_SHADING}`
   )
 }
 
-export function buildAnimationBlock(spec: AnimationSpec, layout: FrameLayout = 'row', view: View = 'side-right'): string {
+export interface AnimationBlockOptions {
+  /** The held items from the form. Repeated as a per-frame lock when set. */
+  heldItems?: string
+}
+
+export function buildAnimationBlock(
+  spec: AnimationSpec,
+  layout: FrameLayout = 'row',
+  view: View = 'side-right',
+  options: AnimationBlockOptions = {},
+): string {
   const poses = usableKeyPoses(spec)
   const grid = layout === 'grid' && poses.length ? gridFor(poses.length) : null
   const frameLabel = (i: number) => {
@@ -73,7 +103,9 @@ export function buildAnimationBlock(spec: AnimationSpec, layout: FrameLayout = '
     spec.name.trim() && `Animation: ${spec.name.trim()}`,
     `Loop: ${spec.loop ? LOOP_LINE : NO_LOOP_LINE}`,
     `Layout: ${layout === 'grid' ? GRID_LAYOUT_LINE : ROW_LAYOUT_LINE}`,
+    viewLockLine(view),
     limbsLine(spec, view),
+    propsLine(options.heldItems),
     ...poses.map((pose, i) => `${frameLabel(i)}: ${pose}`),
     `Clean frames: ${CLEAN_LINE}`,
     `Consistency: ${CONSISTENCY_LINE}`,
@@ -94,7 +126,7 @@ export function buildAnimationPrompt(
 ): string {
   return [
     buildPrompt(style, character, animationAsset(asset, spec, layout)),
-    buildAnimationBlock(spec, layout, asset.view),
+    buildAnimationBlock(spec, layout, asset.view, { heldItems: asset.heldItems }),
   ].join('\n\n')
 }
 

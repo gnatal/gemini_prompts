@@ -3,7 +3,7 @@ import { ANIMATION_PRESETS, defaultAnimations } from '../config/animations'
 import { gridFor, isValidFrameCount } from '../config/assetPresets'
 import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
 import type { AnimationSpec } from '../types'
-import { buildAnimationPrompt, buildAnimationSet, validateAnimations } from './buildAnimations'
+import { buildAnimationPrompt, buildAnimationSet, propsLine, validateAnimations, viewLockLine } from './buildAnimations'
 import { buildPrompt } from './buildPrompt'
 
 const sharedPart = (prompt: string) => prompt.slice(0, prompt.indexOf('[ASSET]'))
@@ -139,7 +139,8 @@ describe('walk and run cycles', () => {
     const left = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ view: 'side-left' }), preset('run'))
     expect(left).toContain("near is the character's left side")
     const front = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ view: 'front' }), preset('run'))
-    expect(front).toMatch(/Limbs: .+farther away\n/)
+    expect(front).toMatch(/Limbs: .+farther away; the far arm and far leg are drawn noticeably darker/)
+    expect(front).not.toContain('near is the character')
     expect(buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('idle'))).not.toContain('Limbs:')
   })
 
@@ -187,5 +188,68 @@ describe('validateAnimations', () => {
       { field: 'animations.x', label: 'Wall slide', message: expect.stringContaining('2 to 12') },
     ])
     expect(validateAnimations([custom, { ...custom, id: 'y', enabled: false, frames: undefined }])).toHaveLength(1)
+  })
+})
+
+describe('locks that keep frames consistent', () => {
+  const block = (prompt: string) => prompt.slice(prompt.indexOf('[ANIMATION]'))
+
+  it('locks the side view in every frame so the character never turns to the camera', () => {
+    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('dash'))
+    expect(block(prompt)).toContain(
+      'View lock: side view, facing right, in every frame, including the first and the last; the character never turns toward the camera\n',
+    )
+  })
+
+  it('locks other views without the side-view wording', () => {
+    expect(viewLockLine('front')).toBe('View lock: front view, in every frame, including the first and the last')
+    expect(viewLockLine('side-left')).toContain('side view, facing left')
+  })
+
+  it('locks the held items to the same hands in every frame', () => {
+    const asset = cleanAsset({ heldItems: 'a pistol in the right hand and a knife in the left hand.' })
+    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), asset, preset('run'))
+    expect(block(prompt)).toContain(
+      'Props: a pistol in the right hand and a knife in the left hand, in every frame; nothing appears, disappears or changes hands\n',
+    )
+  })
+
+  it('has no Props line when nothing is held', () => {
+    expect(propsLine('  ')).toBeNull()
+    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ heldItems: '' }), preset('run'))
+    expect(prompt).not.toContain('Props:')
+  })
+
+  it('shades the far limbs darker whenever near and far are used', () => {
+    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('walk'))
+    expect(prompt).toContain("near is the character's right side; the far arm and far leg are drawn noticeably darker, in shadow")
+  })
+
+  it('puts the locks after the layout and before the frames', () => {
+    const lines = block(buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('run'))).split('\n')
+    const at = (prefix: string) => lines.findIndex((l) => l.startsWith(prefix))
+    expect(at('Layout:')).toBeLessThan(at('View lock:'))
+    expect(at('View lock:')).toBeLessThan(at('Limbs:'))
+    expect(at('Limbs:')).toBeLessThan(at('Props:'))
+    expect(at('Props:')).toBeLessThan(at('Frame 1:'))
+  })
+})
+
+describe('preset wording', () => {
+  it('never tells the model the second half "repeats" the first, which it draws as a copy', () => {
+    for (const a of ANIMATION_PRESETS) expect(a.motion, a.id).not.toMatch(/\brepeats?\b/)
+    for (const id of ['walk', 'run']) expect(preset(id).motion).toContain('not a copy of the first half: the opposite leg leads')
+  })
+
+  it('never uses a standing pose with no facing, which comes out facing the camera', () => {
+    for (const a of ANIMATION_PRESETS) {
+      for (const pose of a.keyPoses) expect(pose, a.id).not.toMatch(/neutral standing pose/)
+    }
+    expect(preset('dash').keyPoses.at(-1)).toContain('facing the same way as the other frames')
+  })
+
+  it('describes the walk passing pose by its silhouette, legs together', () => {
+    expect(preset('walk').keyPoses[2]).toMatch(/^passing: legs together under the hips/)
+    expect(preset('walk').keyPoses[6]).toMatch(/^passing: legs together under the hips/)
   })
 })

@@ -141,6 +141,7 @@ Rules:
 - When `includeCharacter` is false, omit the whole `[CHARACTER]` block.
 - When `hasReferenceImage` is true and the character is included, start the prompt with: `Use the attached reference image as the exact design of the character. Keep every detail identical.`
 - For `sprite-strip`, add `Frames: N, in one horizontal row` after `Type`.
+- When any character field or `heldItems` says "left" or "right", end the `[CHARACTER]` block with `Sides: left and right always mean the character's own left and right, not the viewer's`. Without it, the model read the hands from the character's side but the star, scar and pants hole from the viewer's side, in the same image. Fill from prompt ignores this line.
 
 ## Batch mode
 
@@ -156,8 +157,12 @@ A third output tab that generates one sprite strip prompt per animation, for bui
 - Each row has an on/off toggle, a frame count (2 to 12), a loop toggle, and an expandable motion and frame-poses editor. Custom animations can be added and removed. The list is saved under `apb:animations`.
 - Sheet layout, shared by all animations and saved with them: **Grid** (default) or **One row**. The grid uses equal square cells, near square (4 → 2×2, 6 → 3×2, 8 → 4×2, 12 → 4×3), so the sheet can be cut into equal cells and stays within the aspect ratios image models support. One row is `N:1`.
 - Each prompt forces type `sprite-strip` (shown as `Sprite sheet` in grid layout), the character on, `Frames: N` with the layout, matching framing and aspect ratio (`columns:rows` reduced, or `N:1`). View, held items, background, lighting and exclusions come from the Asset section. The Style and Character blocks are byte-identical to every other prompt.
-- An `[ANIMATION]` block follows `[ASSET]`: name, loop, layout, a `Limbs:` legend when poses use near/far (and which side is near, for side views), one `Frame N:` line per pose (with `(row R, column C)` in grid layout, only when the pose count equals the frame count), a no-motion-blur line and a consistency line.
+- An `[ANIMATION]` block follows `[ASSET]`: name, loop, layout, a `View lock:` line, a `Limbs:` legend when poses use near/far (and which side is near, for side views), a `Props:` line when there are held items, one `Frame N:` line per pose (with `(row R, column C)` in grid layout, only when the pose count equals the frame count), a no-motion-blur line and a consistency line.
 - Walk, run and climb poses name limbs **near** (closer to the camera) and **far**, never left and right. The model loses track of left and right, which made the same leg lead in every frame. The second half of each cycle is the first half with near and far swapped, every frame has an arm position, and both run flight frames require a visible gap under the feet.
+- `View lock:` repeats the view for every frame, including the first and last, and for side views adds that the character never turns toward the camera. Poses with no direction in them ("neutral standing pose", "body leans back") came out facing the camera.
+- The `Limbs:` legend also asks for the far arm and leg to be drawn darker, in shadow. With identical boots and sleeves the model had nothing to tell the legs apart by, and drew one stride in every frame.
+- `Props:` repeats the held items "in every frame; nothing appears, disappears or changes hands". Weapons popped in and out and switched hands between frames.
+- Preset wording avoids "the second half repeats the first half", which the model drew as a literal copy, and uses "the second half of the cycle is not a copy of the first half: the opposite leg leads". The walk passing pose is described by its silhouette (legs together under the hips). Standing poses say "facing the same way as the other frames".
 - When the view is not a side view, the tab shows a warning with a one-click switch to side view.
 - Stored lists carry a presets version. Presets saved by an older version get the new motion and poses, and keep their on/off, frame count and loop settings.
 - Copying is blocked when no animation is on, when an enabled animation has an invalid frame count, or by the usual form rules.
@@ -186,6 +191,12 @@ These are warnings, not blockers. Show each one inline next to its field and in 
 5. **Chroma key clash.** Warn if the background color is within an RGB distance of 100 of any palette color, and suggest magenta `#FF00FF` as an alternative.
 6. **Missing "no text".** Warn if `exclusions` has no entry containing "text".
 7. **Ambiguous hands.** If `heldItems` is filled in but has neither "left" nor "right", hint: "Say which hand, from the character's perspective."
+8. **Palette name vs hex.** Warn when a color word in the name (red, blue, indigo, gold, teal...) doesn't match the hex's hue, and say what color the hex really is. Grays and names without a color word are skipped. "Indigo #D2452D" and "Torii red #264478" made the model mix both colors everywhere.
+9. **Text while excluding text.** Warn when a character field, held items or subject asks for writing (a quoted phrase, or words like kanji, lettering, inscription) and Exclude has "no text".
+10. **Mood lighting on a sprite.** Warn when a sprite, strip, portrait or icon has moonlight, sunset, dramatic, rim light, neon or night lighting. It gets baked into the asset and looks wrong in other scenes.
+11. **Warm vs cold lighting.** Warn when Lines and shading and Lighting pull in opposite directions (warm/sunny vs cold/moonlight). A warm and cold split inside one field is allowed. Skipped when rule 10 already fired.
+12. **Same gear held and worn.** Warn when held items and an outfit field both name a gun, or both name a blade, unless the outfit clause says "empty". "A gun in the right side" plus "a pistol in the right hand" got drawn as two pistols.
+13. **Proportions in heads.** Warn when Proportions has no "N heads tall". "1 head" came out as realistic adult proportions.
 
 ## Validation
 
