@@ -3,6 +3,7 @@ const LABELS: Record<string, string> = {
   'style.artStyle': 'Art style',
   'style.customStyle': 'Custom style',
   'style.pixelResolution': 'Pixel resolution',
+  'style.setting': 'Setting',
   'style.palette': 'Palette',
   'style.linesAndShading': 'Lines and shading',
   'character.name': 'Character name',

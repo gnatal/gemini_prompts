@@ -1,9 +1,11 @@
 import { Controller, useFieldArray, useFormContext } from 'react-hook-form'
 import { MAX_PALETTE_COLORS } from '../config/defaults'
+import { FIELD_HELP } from '../config/fieldHelp'
 import type { FormValues } from '../types'
 import { ColorInput } from './ColorInput'
 import { buttonClass, FieldMessages, inputClass } from './Field'
 import { useFeedback } from './feedback'
+import { InfoTip } from './InfoTip'
 
 export function PaletteEditor() {
   const { control } = useFormContext<FormValues>()
@@ -13,7 +15,10 @@ export function PaletteEditor() {
   return (
     <div data-field="style.palette" className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
-        <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Palette</span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Palette</span>
+          <InfoTip label="Palette" help={FIELD_HELP['style.palette']} />
+        </span>
         <span className="text-xs text-slate-500 dark:text-slate-400">
           {fields.length} / {MAX_PALETTE_COLORS} colors (3 to 6 recommended)
         </span>

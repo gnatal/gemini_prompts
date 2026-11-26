@@ -36,6 +36,7 @@ function formatColor(color: PaletteColor): string {
 export function buildStyleBlock(style: StyleData): string | null {
   return renderBlock('[STYLE]', [
     ['Art style', formatArtStyle(style)],
+    ['Setting', style.setting],
     ['Palette', style.palette.filter((c) => clean(c.hex) || clean(c.name)).map(formatColor).join('; ')],
     ['Lines and shading', style.linesAndShading],
   ])

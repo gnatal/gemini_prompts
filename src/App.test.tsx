@@ -161,6 +161,55 @@ describe('App', () => {
     expect(await navigator.clipboard.readText()).toBe(prompts.join('\n\n---\n\n'))
   })
 
+  it('fills the style from a genre and asks before overwriting', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.selectOptions(screen.getByLabelText('Genre'), 'old-west')
+    expect(screen.getByLabelText('Style profile name')).toHaveValue('Old West')
+    expect((screen.getByLabelText('Setting') as HTMLTextAreaElement).value).toContain('American frontier')
+    expect(screen.getByLabelText('Color 1 name')).toHaveValue('Saddle brown')
+    expect(screen.getByLabelText('Color 5 name')).toHaveValue('Brass')
+    expect(screen.getByLabelText('Art style')).toHaveValue('pixel-art')
+    expect(preview()).toHaveTextContent('Setting: 1880s American frontier')
+    expect(screen.getByText(/Applied “Old West”/)).toBeInTheDocument()
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await user.selectOptions(screen.getByLabelText('Genre'), 'cyberpunk')
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(screen.getByLabelText('Color 1 name')).toHaveValue('Saddle brown')
+
+    confirm.mockReturnValue(true)
+    await user.selectOptions(screen.getByLabelText('Genre'), 'cyberpunk')
+    expect(screen.getByLabelText('Color 1 name')).toHaveValue('Midnight navy')
+    expect(screen.getByLabelText('Style profile name')).toHaveValue('Old West')
+  })
+
+  it('explains a field with examples behind its (i) icon', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const button = screen.getByRole('button', { name: 'About Held items' })
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    await user.click(button)
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    const panel = screen.getByRole('note', { name: 'About Held items' })
+    expect(within(panel).getByText('revolver in the right hand')).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    expect(button).toHaveFocus()
+
+    await user.click(button)
+    await user.click(document.body)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('has an (i) icon on every field', () => {
+    render(<App />)
+    for (const name of ['Genre', 'Art style', 'Setting', 'Palette', 'Name', 'Head', 'Signature details', 'Action', 'View', 'Exclude']) {
+      expect(screen.getByRole('button', { name: `About ${name}` })).toBeInTheDocument()
+    }
+  })
+
   it('fills the batch from a one-click action list', async () => {
     const user = userEvent.setup()
     render(<App />)

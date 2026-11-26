@@ -1,4 +1,6 @@
+import { FIELD_HELP } from '../config/fieldHelp'
 import { buttonClass, inputClass } from './Field'
+import { InfoTip } from './InfoTip'
 
 export interface ProfileBarProps {
   kind: 'style' | 'character'
@@ -61,6 +63,7 @@ export function ProfileBar({
           Delete
         </button>
       </div>
+      <InfoTip label={`saved ${kind}s`} help={FIELD_HELP[`${kind}.profile`]} />
     </div>
   )
 }

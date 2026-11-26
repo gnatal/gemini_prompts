@@ -46,6 +46,7 @@ export function lint(values: FormValues, options: LintOptions = {}): LintWarning
   // Free-text fields that end up in the prompt, keyed by form path.
   const texts: [field: string, value: string | undefined][] = [
     ['style.customStyle', style.artStyle === 'custom' ? style.customStyle : undefined],
+    ['style.setting', style.setting],
     ['style.linesAndShading', style.linesAndShading],
     ...style.palette.flatMap((c, i): [string, string][] => [
       [`style.palette.${i}.name`, c.name],

@@ -8,6 +8,7 @@ export function toStyleData(profile: StyleProfile): StyleData {
     ...defaultStyle(),
     customStyle: '',
     pixelResolution: '',
+    setting: '',
     ...data,
     palette: data.palette.map((c) => ({ ...c })),
   }

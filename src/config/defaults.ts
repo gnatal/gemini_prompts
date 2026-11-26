@@ -13,6 +13,7 @@ export function defaultStyle(): StyleData {
     artStyle: 'pixel-art',
     customStyle: '',
     pixelResolution: '64x64',
+    setting: '',
     palette: [{ name: '', hex: '#1E4FD8', usage: '' }],
     linesAndShading: '',
   }

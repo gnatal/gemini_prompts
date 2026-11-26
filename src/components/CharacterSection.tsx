@@ -1,6 +1,8 @@
 import { Controller, useFormContext, useWatch } from 'react-hook-form'
+import { FIELD_HELP } from '../config/fieldHelp'
 import type { FormValues } from '../types'
 import { Field, inputClass } from './Field'
+import { InfoTip } from './InfoTip'
 import { ProfileBar, type ProfileControls } from './ProfileBar'
 import { Section } from './Section'
 import { TagListInput } from './TagListInput'
@@ -86,15 +88,20 @@ export function CharacterSection({ profile }: { profile: ProfileControls }) {
         />
       </Field>
 
-      <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
-        <input type="checkbox" className="mt-0.5 size-4 accent-indigo-600" {...register('character.hasReferenceImage')} />
-        <span>
-          I will attach an approved reference image
-          <span className="block text-xs text-slate-500 dark:text-slate-400">
-            Adds a line telling the model to copy the attached design exactly.
+      <div className="flex items-start gap-1.5">
+        <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input type="checkbox" className="mt-0.5 size-4 accent-indigo-600" {...register('character.hasReferenceImage')} />
+          <span>
+            I will attach an approved reference image
+            <span className="block text-xs text-slate-500 dark:text-slate-400">
+              Adds a line telling the model to copy the attached design exactly.
+            </span>
           </span>
+        </label>
+        <span className="mt-0.5">
+          <InfoTip label="Reference image" help={FIELD_HELP['character.hasReferenceImage']} />
         </span>
-      </label>
+      </div>
     </Section>
   )
 }

@@ -1,11 +1,13 @@
 import { Controller, useFormContext, useWatch } from 'react-hook-form'
 import { applyAssetPreset, syncFrameCount, usesChromaKey } from '../config/assetPresets'
 import { CHROMA_GREEN, CHROMA_MAGENTA } from '../config/defaults'
+import { FIELD_HELP } from '../config/fieldHelp'
 import { ASPECT_RATIO_LABELS, ASPECT_RATIOS, ASSET_TYPE_LABELS, ASSET_TYPES, VIEW_LABELS, VIEWS } from '../config/labels'
 import { deepEqual } from '../lib/deepEqual'
 import type { AssetRequest, AssetType, FormValues } from '../types'
 import { ColorInput } from './ColorInput'
 import { buttonClass, Field, inputClass } from './Field'
+import { InfoTip } from './InfoTip'
 import { Section } from './Section'
 import { TagListInput } from './TagListInput'
 
@@ -76,10 +78,13 @@ export function AssetSection() {
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-        <input type="checkbox" className="size-4 accent-indigo-600" {...register('asset.includeCharacter')} />
-        Include character
-      </label>
+      <div className="flex items-center gap-1.5">
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input type="checkbox" className="size-4 accent-indigo-600" {...register('asset.includeCharacter')} />
+          Include character
+        </label>
+        <InfoTip label="Include character" help={FIELD_HELP['asset.includeCharacter']} />
+      </div>
 
       {!includeCharacter && (
         <Field field="asset.subject" label={subject.label} htmlFor="asset-subject">

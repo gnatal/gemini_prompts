@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useFormContext, useWatch } from 'react-hook-form'
+import { applyGenre, GENRES, hasGenreFields } from '../config/genres'
 import { ART_STYLE_LABELS, ART_STYLES } from '../config/labels'
 import type { FormValues } from '../types'
 import { Field, inputClass } from './Field'
@@ -7,12 +9,49 @@ import { ProfileBar, type ProfileControls } from './ProfileBar'
 import { Section } from './Section'
 
 export function StyleSection({ profile }: { profile: ProfileControls }) {
-  const { register, control } = useFormContext<FormValues>()
+  const { register, control, getValues, setValue } = useFormContext<FormValues>()
   const artStyle = useWatch({ control, name: 'style.artStyle' })
+  const [appliedGenre, setAppliedGenre] = useState<string | null>(null)
+
+  const onGenre = (id: string) => {
+    const genre = GENRES.find((g) => g.id === id)
+    if (!genre) return
+    const current = getValues('style')
+    if (
+      hasGenreFields(current) &&
+      !window.confirm(`Replace the setting, palette, and lines and shading with the “${genre.label}” set-up?`)
+    )
+      return
+    const next = applyGenre(current, genre)
+    for (const key of ['name', 'setting', 'palette', 'linesAndShading'] as const) {
+      setValue(`style.${key}`, next[key] as never, { shouldDirty: true })
+    }
+    setAppliedGenre(genre.label)
+  }
 
   return (
     <Section title="Style" subtitle="Shared by every asset in the game">
       <ProfileBar kind="style" {...profile} />
+
+      <Field
+        field="style.genre"
+        label="Genre"
+        htmlFor="style-genre"
+        hint={
+          appliedGenre
+            ? `Applied “${appliedGenre}”. Edit anything below, then save the style.`
+            : 'Fills the setting, palette, and lines and shading. Your art style is kept.'
+        }
+      >
+        <select id="style-genre" className={inputClass} value="" onChange={(e) => onGenre(e.target.value)}>
+          <option value="">Start from a genre…</option>
+          {GENRES.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.label}
+            </option>
+          ))}
+        </select>
+      </Field>
 
       <Field field="style.name" label="Style profile name" htmlFor="style-name">
         <input id="style-name" className={inputClass} placeholder="Main game style" {...register('style.name')} />
@@ -56,6 +95,16 @@ export function StyleSection({ profile }: { profile: ProfileControls }) {
           />
         </Field>
       )}
+
+      <Field field="style.setting" label="Setting" htmlFor="style-setting">
+        <textarea
+          id="style-setting"
+          rows={2}
+          className={inputClass}
+          placeholder="1880s American frontier: dusty main streets, wooden saloons, red rock canyons"
+          {...register('style.setting')}
+        />
+      </Field>
 
       <PaletteEditor />
 

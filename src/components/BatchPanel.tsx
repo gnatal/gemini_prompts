@@ -1,6 +1,8 @@
 import { ACTION_LISTS } from '../config/actionLists'
+import { FIELD_HELP } from '../config/fieldHelp'
 import type { ValidationIssue } from '../schemas'
 import { buttonClass, inputClass } from './Field'
+import { InfoTip } from './InfoTip'
 import { BlockingIssues, CopyButton } from './PromptPreview'
 
 interface BatchPanelProps {
@@ -17,9 +19,12 @@ export function BatchPanel({ text, onTextChange, prompts, issues, onCopy, onCopy
   return (
     <section aria-label="Batch mode" className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
-        <label htmlFor="batch-actions" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          Actions, one per line
-        </label>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="batch-actions" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Actions, one per line
+          </label>
+          <InfoTip label="batch actions" help={FIELD_HELP['batch.actions']} />
+        </div>
         <textarea
           id="batch-actions"
           rows={6}

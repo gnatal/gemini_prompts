@@ -36,6 +36,7 @@ export const styleDataSchema = z.object({
   artStyle: artStyleSchema,
   customStyle: z.string().optional(),
   pixelResolution: z.string().optional(),
+  setting: z.string().optional(),
   palette: z.array(paletteColorSchema),
   linesAndShading: z.string(),
 }) satisfies z.ZodType<StyleData>

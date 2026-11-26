@@ -52,6 +52,7 @@ interface StyleProfile {
   artStyle: ArtStyle;
   customStyle?: string;      // used only when artStyle is 'custom'
   pixelResolution?: string;  // e.g. "64x64", only for pixel-art
+  setting?: string;          // genre and world, filled by the genre presets
   palette: PaletteColor[];   // 3 to 6 entries recommended
   linesAndShading: string;   // "thick dark outlines, 2-tone cel shading, no gradients"
 }

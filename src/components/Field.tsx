@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
+import { FIELD_HELP } from '../config/fieldHelp'
 import { useFeedback } from './feedback'
+import { InfoTip } from './InfoTip'
 
 interface FieldProps {
   /** Form path, used to match warnings/errors and for focusing from the summaries. */
@@ -13,11 +15,15 @@ interface FieldProps {
 
 export function Field({ field, label, htmlFor, hint, className = '', children }: FieldProps) {
   const { warnings, errors } = useFeedback(field)
+  const help = FIELD_HELP[field]
   return (
     <div data-field={field} className={`flex flex-col gap-1 ${className}`}>
-      <label htmlFor={htmlFor} className="text-sm font-medium text-slate-700 dark:text-slate-300">
-        {label}
-      </label>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor={htmlFor} className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          {label}
+        </label>
+        {help && <InfoTip label={label} help={help} />}
+      </div>
       {children}
       {hint && <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p>}
       <FieldMessages warnings={warnings.map((w) => w.message)} errors={errors.map((e) => e.message)} />
