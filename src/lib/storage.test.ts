@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import { defaultAnimations } from '../config/animations'
 import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
 import type { CharacterProfile, StyleProfile } from '../types'
 import {
   EMPTY_STATE,
+  defaultAnimationSettings,
   exportProfiles,
+  loadAnimations,
   loadState,
   mergeProfiles,
   parseImport,
+  saveAnimations,
   saveAssetDraft,
   saveCharacters,
   saveSelection,
@@ -76,6 +80,46 @@ describe('storage', () => {
     expect(loadState(throwing)).toEqual(EMPTY_STATE)
     expect(saveStyles([style], throwing)).toBe(false)
     expect(saveStyles([style], null)).toBe(false)
+  })
+})
+
+describe('animation storage', () => {
+  it('round-trips the layout and the list, including an empty frame count', () => {
+    const storage = memoryStorage()
+    const animations = defaultAnimations()
+    animations[0] = { ...animations[0], frames: undefined, enabled: false }
+    animations.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: '', keyPoses: [] })
+    expect(saveAnimations({ layout: 'row', animations }, storage)).toBe(true)
+    expect(loadAnimations(storage)).toEqual({ layout: 'row', animations })
+  })
+
+  it('keeps edited preset poses saved by the current version', () => {
+    const storage = memoryStorage()
+    const animations = defaultAnimations().map((a) => (a.id === 'run' ? { ...a, keyPoses: ['my pose'] } : a))
+    saveAnimations({ layout: 'grid', animations }, storage)
+    expect(loadAnimations(storage).animations.find((a) => a.id === 'run')?.keyPoses).toEqual(['my pose'])
+  })
+
+  it('migrates a version 1 list: presets get the new poses, choices and custom animations are kept', () => {
+    const v1 = defaultAnimations().map((a) =>
+      a.id === 'run' ? { ...a, frames: 6, enabled: false, keyPoses: ['right foot lands under the body'] } : a,
+    )
+    v1.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: 'sliding', keyPoses: ['x'] })
+    const storage = memoryStorage({ [STORAGE_KEYS.animations]: JSON.stringify(v1) })
+    const { layout, animations } = loadAnimations(storage)
+    expect(layout).toBe('grid')
+    const run = animations.find((a) => a.id === 'run')!
+    expect(run).toMatchObject({ frames: 6, enabled: false })
+    expect(run.keyPoses).toEqual(defaultAnimations().find((a) => a.id === 'run')!.keyPoses)
+    expect(animations.find((a) => a.id === 'custom')).toEqual(v1.at(-1))
+  })
+
+  it('falls back to the presets when nothing valid is stored', () => {
+    const defaults = defaultAnimationSettings()
+    expect(loadAnimations(memoryStorage())).toEqual(defaults)
+    expect(loadAnimations(memoryStorage({ [STORAGE_KEYS.animations]: '{not json' }))).toEqual(defaults)
+    expect(loadAnimations(memoryStorage({ [STORAGE_KEYS.animations]: '[{"id":1}]' }))).toEqual(defaults)
+    expect(loadAnimations(null)).toEqual(defaults)
   })
 })
 

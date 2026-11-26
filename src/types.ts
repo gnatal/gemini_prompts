@@ -32,6 +32,7 @@ export interface CharacterProfile {
 export type AssetType = 'sprite' | 'sprite-strip' | 'portrait' | 'item-icon' | 'background' | 'tile'
 export type View = 'side-right' | 'side-left' | 'three-quarter-front' | 'front' | 'top-down' | 'isometric'
 export type AspectRatio = '1:1' | '4:3' | '16:9' | '9:16' | 'custom'
+export type FrameLayout = 'row' | 'grid'
 
 export interface AssetRequest {
   type: AssetType
@@ -41,12 +42,24 @@ export interface AssetRequest {
   heldItems?: string // which hand holds what, from the character's perspective
   view: View
   frameCount?: number // sprite-strip only, 2 to 12
+  frameLayout?: FrameLayout // sprite-strip only, default 'row'
   framing: string
   backgroundColor: string // hex, default "#00FF00"
   lighting: string // default "even and neutral, from upper left"
   aspectRatio: AspectRatio
   customAspectRatio?: string
   exclusions: string[] // default: no text, no logos, no watermark, no extra characters
+}
+
+/** One animation in the Animations tab. Each becomes a sprite strip prompt. */
+export interface AnimationSpec {
+  id: string
+  name: string // "Walk"
+  enabled: boolean // included in the generated set
+  frames?: number // 2 to 12, undefined while the input is empty
+  loop: boolean // the last frame flows back into the first
+  motion: string // becomes the Action line
+  keyPoses: string[] // one per frame, added only when the count matches `frames`
 }
 
 /** A style profile's editable content, without its storage id. */

@@ -148,6 +148,33 @@ Rules:
 - The Style and Character blocks must be byte-identical across all prompts in a batch.
 - Include one-click action lists, for example "Platformer basics": idle, run, jump, fall, shoot, hurt, death.
 
+## Animations tab
+
+A third output tab that generates one sprite strip prompt per animation, for building a full set of animation sprite sheets.
+
+- Presets (`src/config/animations.ts`): Idle 4 (loop), Walk 8 (loop), Run 8 (loop), Dash 12, Jump 6, Fall 4 (loop), Land 4, Crouch 3, Attack 6, Hurt 3, Death 8, Climb 6 (loop).
+- Each row has an on/off toggle, a frame count (2 to 12), a loop toggle, and an expandable motion and frame-poses editor. Custom animations can be added and removed. The list is saved under `apb:animations`.
+- Sheet layout, shared by all animations and saved with them: **Grid** (default) or **One row**. The grid uses equal square cells, near square (4 → 2×2, 6 → 3×2, 8 → 4×2, 12 → 4×3), so the sheet can be cut into equal cells and stays within the aspect ratios image models support. One row is `N:1`.
+- Each prompt forces type `sprite-strip` (shown as `Sprite sheet` in grid layout), the character on, `Frames: N` with the layout, matching framing and aspect ratio (`columns:rows` reduced, or `N:1`). View, held items, background, lighting and exclusions come from the Asset section. The Style and Character blocks are byte-identical to every other prompt.
+- An `[ANIMATION]` block follows `[ASSET]`: name, loop, layout, a `Limbs:` legend when poses use near/far (and which side is near, for side views), one `Frame N:` line per pose (with `(row R, column C)` in grid layout, only when the pose count equals the frame count), a no-motion-blur line and a consistency line.
+- Walk, run and climb poses name limbs **near** (closer to the camera) and **far**, never left and right. The model loses track of left and right, which made the same leg lead in every frame. The second half of each cycle is the first half with near and far swapped, every frame has an arm position, and both run flight frames require a visible gap under the feet.
+- When the view is not a side view, the tab shows a warning with a one-click switch to side view.
+- Stored lists carry a presets version. Presets saved by an older version get the new motion and poses, and keep their on/off, frame count and loop settings.
+- Copying is blocked when no animation is on, when an enabled animation has an invalid frame count, or by the usual form rules.
+
+## Fill from prompt
+
+A header button opens a panel where a prompt can be pasted and read back into the form (`src/lib/parsePrompt.ts`, pure, the inverse of `buildPrompt`).
+
+- Fields are matched by their label, case-insensitive, with or without the `[STYLE]` / `[CHARACTER]` / `[ASSET]` headers. A line that isn't a known label continues the previous field's value.
+- Each block found in the text replaces that whole section (fields missing from the text become empty). Blocks not found keep their current values. The style name is kept, since it isn't in the prompt.
+- The reference image line sets `hasReferenceImage`. A prompt with Style and Asset blocks but no Character block turns the character off.
+- `Sprite sheet` and `Frames: N, in a grid…` set `frameLayout: 'grid'`. A ratio not in the list becomes a custom ratio. Unknown art styles become a custom style.
+- Other blocks such as `[ANIMATION]` are skipped. With `---`-separated batch output, only the first prompt is used. Skipped blocks, unknown values and unrecognized lines are listed in the notice after filling.
+- Building, parsing and building again gives back the exact same text.
+
+Sprite strips also have a **Layout** select (One row / Grid) next to Frames. Framing and aspect ratio follow it, unless they were customized.
+
 ## Lint rules
 
 These are warnings, not blockers. Show each one inline next to its field and in a summary above the preview.

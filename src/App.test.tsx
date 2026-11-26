@@ -217,4 +217,123 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Platformer basics' }))
     expect(screen.getAllByTestId('batch-prompt')).toHaveLength(7)
   })
+
+  it('generates one sprite sheet prompt per animation with its own frame count', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.type(screen.getByLabelText('Name'), 'Rex Ranger')
+    await user.type(screen.getByLabelText('Proportions'), '4 heads tall')
+    await user.click(screen.getByRole('tab', { name: 'Animations' }))
+
+    const panel = screen.getByRole('region', { name: 'Animations' })
+    await user.click(within(panel).getByRole('button', { name: 'All off' }))
+    for (const name of ['Idle', 'Walk', 'Dash', 'Run', 'Jump']) {
+      await user.click(within(panel).getByLabelText(`Include ${name}`))
+    }
+
+    const prompts = screen.getAllByTestId('animation-prompt').map((el) => el.textContent ?? '')
+    expect(prompts.map((p) => /Frames: (\d+)/.exec(p)?.[1])).toEqual(['4', '8', '8', '12', '6'])
+    expect(prompts[3]).toContain('Aspect ratio: 4:3')
+    expect(prompts[3]).toContain('Frame 12 (row 3, column 4): ')
+    expect(new Set(prompts.map((p) => p.slice(0, p.indexOf('[ASSET]')))).size).toBe(1)
+
+    await user.click(within(panel).getByRole('button', { name: 'Copy all' }))
+    expect(await navigator.clipboard.readText()).toBe(prompts.join('\n\n---\n\n'))
+  })
+
+  it('blocks copying an animation with an invalid frame count and keeps edits after a reload', async () => {
+    const user = userEvent.setup()
+    const { unmount } = render(<App />)
+    await user.type(screen.getByLabelText('Name'), 'Rex Ranger')
+    await user.type(screen.getByLabelText('Proportions'), '4 heads tall')
+    await user.click(screen.getByRole('tab', { name: 'Animations' }))
+    const panel = screen.getByRole('region', { name: 'Animations' })
+
+    await user.clear(within(panel).getByLabelText('Walk frames'))
+    await user.type(within(panel).getByLabelText('Walk frames'), '20')
+    expect(within(panel).getByText(/Frame count must be a whole number/)).toBeInTheDocument()
+    expect(within(panel).getByRole('button', { name: 'Copy all' })).toBeDisabled()
+
+    await user.clear(within(panel).getByLabelText('Walk frames'))
+    await user.type(within(panel).getByLabelText('Walk frames'), '6')
+    expect(within(panel).getByRole('button', { name: 'Copy all' })).toBeEnabled()
+
+    await user.type(within(panel).getByLabelText('New animation name'), 'wall slide{Enter}')
+    expect(within(panel).getByLabelText('Include wall slide')).toBeChecked()
+
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.animations) ?? '{}').animations
+    expect(stored.find((a: { id: string }) => a.id === 'walk').frames).toBe(6)
+    unmount()
+    render(<App />)
+    await user.click(screen.getByRole('tab', { name: 'Animations' }))
+    expect(screen.getByLabelText('Walk frames')).toHaveValue(6)
+    expect(screen.getByLabelText('Include wall slide')).toBeInTheDocument()
+  })
+
+  it('switches the animation sheets between a grid and one row, and warns about non-side views', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('tab', { name: 'Animations' }))
+    const panel = screen.getByRole('region', { name: 'Animations' })
+    const first = () => screen.getAllByTestId('animation-prompt')[0].textContent ?? ''
+
+    expect(first()).toContain('Frames: 4, in a grid of 2 columns and 2 rows')
+    await user.click(within(panel).getByLabelText('One row'))
+    expect(first()).toContain('Frames: 4, in one horizontal row')
+    expect(first()).toContain('Aspect ratio: 4:1')
+
+    expect(within(panel).queryByText(/read best from the side/)).not.toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('View'), 'front')
+    expect(within(panel).getByText(/read best from the side/)).toBeInTheDocument()
+    await user.click(within(panel).getByRole('button', { name: 'Use side view, facing right' }))
+    expect(screen.getByLabelText('View')).toHaveValue('side-right')
+    expect(within(panel).queryByText(/read best from the side/)).not.toBeInTheDocument()
+  })
+
+  it('fills the form from a pasted prompt', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'Fill from prompt' }))
+    const panel = screen.getByRole('region', { name: 'Fill from prompt' })
+    expect(within(panel).getByRole('button', { name: 'Fill form' })).toBeDisabled()
+
+    await user.click(within(panel).getByLabelText('Prompt to read'))
+    await user.paste('nothing useful here')
+    await user.click(within(panel).getByRole('button', { name: 'Fill form' }))
+    expect(within(panel).getByRole('alert')).toHaveTextContent('No fields found')
+
+    await user.clear(within(panel).getByLabelText('Prompt to read'))
+    await user.paste(
+      [
+        '[STYLE]',
+        'Art style: 2D cel-shaded',
+        'Palette: Ocean teal #1F6F78 (sea, sashes); Coat red #A3262A (coats)',
+        '',
+        '[CHARACTER]',
+        'Name: Dread pirate Robert',
+        'Proportions: 6 heads tall',
+        'Signature details: a pearl collar; a red waistband',
+        '',
+        '[ASSET]',
+        'Type: Sprite sheet',
+        'Frames: 8, in a grid of 4 columns and 2 rows, read left to right, top to bottom',
+        'Action: running',
+        'View: Side view, facing right',
+        'Aspect ratio: 2:1',
+        'Exclude: no text, no logos',
+      ].join('\n'),
+    )
+    await user.click(within(panel).getByRole('button', { name: 'Fill form' }))
+
+    expect(screen.queryByRole('region', { name: 'Fill from prompt' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Filled Style, Character and Asset from the prompt/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Art style')).toHaveValue('cel-shaded-2d')
+    expect(screen.getByLabelText('Color 2 name')).toHaveValue('Coat red')
+    expect(screen.getByLabelText('Name')).toHaveValue('Dread pirate Robert')
+    expect(screen.getByLabelText('Asset type')).toHaveValue('sprite-strip')
+    expect(screen.getByLabelText('Layout')).toHaveValue('grid')
+    expect(screen.getByLabelText('Action')).toHaveValue('running')
+    expect(preview()).toHaveTextContent('Frames: 8, in a grid of 4 columns and 2 rows')
+    expect(preview()).toHaveTextContent('Signature details: a pearl collar; a red waistband')
+  })
 })

@@ -3,6 +3,7 @@ import { ART_STYLES, ASPECT_RATIOS, ASSET_TYPES, VIEWS } from './config/labels'
 import { isValidFrameCount, usesChromaKey } from './config/assetPresets'
 import { isValidHex } from './lib/color'
 import type {
+  AnimationSpec,
   AssetRequest,
   CharacterData,
   CharacterProfile,
@@ -68,6 +69,7 @@ export const assetRequestSchema = z.object({
   heldItems: z.string().optional(),
   view: viewSchema,
   frameCount: z.number().optional(),
+  frameLayout: z.enum(['row', 'grid']).optional(),
   framing: z.string(),
   backgroundColor: z.string(),
   lighting: z.string(),
@@ -75,6 +77,16 @@ export const assetRequestSchema = z.object({
   customAspectRatio: z.string().optional(),
   exclusions: z.array(z.string()),
 }) satisfies z.ZodType<AssetRequest>
+
+export const animationSpecSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  enabled: z.boolean(),
+  frames: z.number().optional(),
+  loop: z.boolean(),
+  motion: z.string(),
+  keyPoses: z.array(z.string()),
+}) satisfies z.ZodType<AnimationSpec>
 
 export const formValuesSchema = z.object({
   style: styleDataSchema,

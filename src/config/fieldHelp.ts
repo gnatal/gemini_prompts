@@ -124,6 +124,11 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
     examples: ['4 for a short idle loop', '6 for a run cycle', '8 for a smooth attack'],
     tip: 'Fewer frames come out more consistent. Split long animations into several strips.',
   },
+  'asset.frameLayout': {
+    text: 'How the frames are arranged. One row puts them side by side (N:1). Grid uses equal square cells, e.g. 8 frames as 4 columns by 2 rows.',
+    examples: ['Grid for 8 or more frames', 'One row for short strips of 2 to 4 frames'],
+    tip: 'Very wide rows often come out squashed or unevenly spaced. A grid is easier to cut into frames.',
+  },
   'asset.includeCharacter': {
     text: 'Whether the character from the Character section appears in this asset. Turn it off for items, scenes and tiles.',
   },
@@ -185,5 +190,12 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
     text: 'One action per line. Each line becomes its own prompt, with the same Style and Character blocks.',
     examples: ['idle', 'run', 'jump', 'attack with the sword'],
     tip: 'The other Asset settings (type, view, framing...) are shared by every line.',
+  },
+
+  // Animations
+  'animations.list': {
+    text: 'Each animation that is on becomes its own sprite strip prompt: the frame count sets the number of frames and the N:1 aspect ratio, and the frame poses tell the model what to draw in each frame.',
+    examples: ['Idle: 4 frames, loop', 'Walk or Run: 8 frames, loop', 'Dash: 12 frames', 'Jump: 6 frames'],
+    tip: 'Generate the idle first and attach it as the reference image for the others, so the character stays the same in every sheet.',
   },
 }

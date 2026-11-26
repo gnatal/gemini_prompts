@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cleanAsset } from '../test/fixtures'
-import { applyAssetPreset, syncFrameCount } from './assetPresets'
+import { applyAssetPreset, syncFrameCount, syncFrameLayout } from './assetPresets'
 
 describe('asset presets', () => {
   it('applies the preset table without wiping the action', () => {
@@ -38,5 +38,21 @@ describe('asset presets', () => {
   it('keeps a customized framing when the frame count changes', () => {
     const strip = { ...applyAssetPreset(cleanAsset(), 'sprite-strip'), framing: 'my own framing' }
     expect(syncFrameCount(strip, 3).framing).toBe('my own framing')
+  })
+})
+
+describe('frame layout', () => {
+  it('switches the framing and ratio between one row and a grid, both ways', () => {
+    const strip = applyAssetPreset(cleanAsset({ frameCount: 8 }), 'sprite-strip')
+    const grid = syncFrameLayout(strip, 'grid')
+    expect(grid).toMatchObject({ frameLayout: 'grid', customAspectRatio: '2:1' })
+    expect(grid.framing).toMatch(/^4 columns by 2 rows/)
+    expect(syncFrameCount(grid, 12)).toMatchObject({ customAspectRatio: '4:3' })
+    expect(syncFrameLayout(grid, 'row')).toMatchObject({ customAspectRatio: '8:1', framing: strip.framing })
+  })
+
+  it('keeps a customized framing and ratio when the layout changes', () => {
+    const strip = { ...applyAssetPreset(cleanAsset({ frameCount: 8 }), 'sprite-strip'), framing: 'mine', customAspectRatio: '3:2' }
+    expect(syncFrameLayout(strip, 'grid')).toMatchObject({ framing: 'mine', customAspectRatio: '3:2' })
   })
 })

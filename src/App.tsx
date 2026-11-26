@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { FormProvider, useForm, useWatch } from 'react-hook-form'
+import { AnimationPanel } from './components/AnimationPanel'
 import { AssetSection } from './components/AssetSection'
 import { BatchPanel } from './components/BatchPanel'
 import { CharacterSection } from './components/CharacterSection'
@@ -7,23 +8,28 @@ import { FeedbackContext, type Feedback } from './components/feedback'
 import { buttonClass } from './components/Field'
 import { LintSummary } from './components/LintSummary'
 import type { ProfileControls } from './components/ProfileBar'
+import { PastePromptPanel } from './components/PastePromptPanel'
 import { CopyButton, PromptPreview } from './components/PromptPreview'
 import { StyleSection } from './components/StyleSection'
 import { Toast } from './components/Toast'
 import { defaultAsset, defaultCharacter, defaultStyle } from './config/defaults'
+import { animationAsset, buildAnimationSet, validateAnimations } from './lib/buildAnimations'
 import { buildBatch, joinBatch, parseActions } from './lib/buildBatch'
 import { buildPrompt } from './lib/buildPrompt'
 import { copyText, downloadText } from './lib/clipboard'
 import { deepEqual } from './lib/deepEqual'
 import { lint } from './lib/lint'
+import { parsePrompt } from './lib/parsePrompt'
 import { getPath } from './lib/path'
 import { toCharacterData, toStyleData, uniqueName } from './lib/profiles'
 import {
   exportProfiles,
+  loadAnimations,
   loadState,
   mergeProfiles,
   newId,
   parseImport,
+  saveAnimations,
   saveAssetDraft,
   saveCharacters,
   saveSelection,
@@ -44,7 +50,9 @@ function loadInitial() {
   return { stored, values }
 }
 
-type Tab = 'single' | 'batch'
+type Tab = 'single' | 'batch' | 'animations'
+
+const TAB_LABELS: Record<Tab, string> = { single: 'Single prompt', batch: 'Batch', animations: 'Animations' }
 type Notice = { kind: 'error' | 'info'; text: string }
 
 export default function App() {
@@ -60,8 +68,11 @@ export default function App() {
   const [characterId, setCharacterId] = useState(initial.stored.selection.characterId)
   const [tab, setTab] = useState<Tab>('single')
   const [batchText, setBatchText] = useState('')
+  const [animationSettings, setAnimationSettings] = useState(loadAnimations)
+  const { animations, layout } = animationSettings
   const [toast, setToast] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [pasteOpen, setPasteOpen] = useState(false)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const importInput = useRef<HTMLInputElement>(null)
 
@@ -69,6 +80,7 @@ export default function App() {
   useEffect(() => void saveStyles(styles), [styles])
   useEffect(() => void saveCharacters(characters), [characters])
   useEffect(() => void saveSelection({ styleId, characterId }), [styleId, characterId])
+  useEffect(() => void saveAnimations(animationSettings), [animationSettings])
   const assetJson = JSON.stringify(values.asset)
   useEffect(() => void saveAssetDraft(JSON.parse(assetJson)), [assetJson])
   useEffect(() => () => clearTimeout(toastTimer.current), [])
@@ -83,6 +95,13 @@ export default function App() {
   const batchIssues = actions.length
     ? validateForm({ ...values, asset: { ...values.asset, action: actions[0] } })
     : []
+  const animationPrompts = buildAnimationSet(values.style, values.character, values.asset, animations, layout)
+  // Each animation supplies its own action, frames and framing, so only the other form rules apply.
+  const firstAnimation = animationPrompts[0]?.spec
+  const animationIssues = [
+    ...validateAnimations(animations),
+    ...(firstAnimation ? validateForm({ ...values, asset: animationAsset(values.asset, firstAnimation, layout) }) : []),
+  ]
 
   const feedback: Feedback = {
     warnings,
@@ -173,6 +192,19 @@ export default function App() {
     },
   }
 
+  // Fill from a pasted prompt
+  const fillFromPrompt = (text: string): string | null => {
+    const result = parsePrompt(text, form.getValues())
+    if (!result.filled.length) {
+      return 'No fields found. Paste a prompt with lines like “Name: Rex Ranger” or “Action: running”.'
+    }
+    replaceForm(result.values)
+    setPasteOpen(false)
+    const filled = result.filled.join(', ').replace(/, ([^,]*)$/, ' and $1')
+    setNotice({ kind: 'info', text: [`Filled ${filled} from the prompt.`, ...result.notes].join(' ') })
+    return null
+  }
+
   // Export / import
   const onExport = () => {
     const date = new Date().toISOString().slice(0, 10)
@@ -223,6 +255,12 @@ export default function App() {
   const batchBlocked = batchIssues.length > 0 || batchPrompts.length === 0
   const copyAll = () =>
     copy(joinBatch(batchPrompts), `Copied ${batchPrompts.length} ${batchPrompts.length === 1 ? 'prompt' : 'prompts'}`)
+  const animationsBlocked = animationIssues.length > 0 || animationPrompts.length === 0
+  const copyAllAnimations = () =>
+    copy(
+      joinBatch(animationPrompts.map((a) => a.prompt)),
+      `Copied ${animationPrompts.length} animation ${animationPrompts.length === 1 ? 'prompt' : 'prompts'}`,
+    )
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -234,6 +272,14 @@ export default function App() {
               Consistent image generation prompts for game assets
             </p>
           </div>
+          <button
+            type="button"
+            className={buttonClass}
+            aria-expanded={pasteOpen}
+            onClick={() => setPasteOpen((open) => !open)}
+          >
+            Fill from prompt
+          </button>
           <button type="button" className={buttonClass} onClick={onExport}>
             Export profiles
           </button>
@@ -250,6 +296,12 @@ export default function App() {
           />
         </div>
       </header>
+
+      {pasteOpen && (
+        <div className="mx-auto max-w-7xl px-4 pt-4">
+          <PastePromptPanel onFill={fillFromPrompt} onClose={() => setPasteOpen(false)} />
+        </div>
+      )}
 
       {notice && (
         <div className="mx-auto max-w-7xl px-4 pt-4">
@@ -281,7 +333,7 @@ export default function App() {
 
             <aside className="flex min-w-0 flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
               <div role="tablist" aria-label="Output mode" className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
-                {(['single', 'batch'] as const).map((t) => (
+                {(['single', 'batch', 'animations'] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
@@ -295,16 +347,15 @@ export default function App() {
                         : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white')
                     }
                   >
-                    {t === 'single' ? 'Single prompt' : 'Batch'}
+                    {TAB_LABELS[t]}
                   </button>
                 ))}
               </div>
 
               <LintSummary warnings={warnings} />
 
-              {tab === 'single' ? (
-                <PromptPreview prompt={prompt} issues={issues} onCopy={() => copy(prompt)} />
-              ) : (
+              {tab === 'single' && <PromptPreview prompt={prompt} issues={issues} onCopy={() => copy(prompt)} />}
+              {tab === 'batch' && (
                 <BatchPanel
                   text={batchText}
                   onTextChange={setBatchText}
@@ -314,6 +365,20 @@ export default function App() {
                   onCopyAll={copyAll}
                 />
               )}
+              {tab === 'animations' && (
+                <AnimationPanel
+                  animations={animations}
+                  onChange={(list) => setAnimationSettings((s) => ({ ...s, animations: list }))}
+                  layout={layout}
+                  onLayoutChange={(next) => setAnimationSettings((s) => ({ ...s, layout: next }))}
+                  view={values.asset.view}
+                  onUseSideView={() => form.setValue('asset.view', 'side-right', { shouldDirty: true })}
+                  prompts={animationPrompts}
+                  issues={animationIssues}
+                  onCopy={copy}
+                  onCopyAll={copyAllAnimations}
+                />
+              )}
             </aside>
           </main>
         </FeedbackContext.Provider>
@@ -321,13 +386,22 @@ export default function App() {
 
       {/* Mobile: sticky copy bar */}
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
-        {tab === 'single' ? (
+        {tab === 'single' && (
           <CopyButton disabled={singleBlocked} onCopy={() => copy(prompt)} className="w-full py-2.5" />
-        ) : (
+        )}
+        {tab === 'batch' && (
           <CopyButton
             disabled={batchBlocked}
             onCopy={copyAll}
             label={`Copy all (${batchPrompts.length})`}
+            className="w-full py-2.5"
+          />
+        )}
+        {tab === 'animations' && (
+          <CopyButton
+            disabled={animationsBlocked}
+            onCopy={copyAllAnimations}
+            label={`Copy all (${animationPrompts.length})`}
             className="w-full py-2.5"
           />
         )}

@@ -3,7 +3,8 @@ import { FIELD_HELP } from '../config/fieldHelp'
 import type { ValidationIssue } from '../schemas'
 import { buttonClass, inputClass } from './Field'
 import { InfoTip } from './InfoTip'
-import { BlockingIssues, CopyButton } from './PromptPreview'
+import { PromptList } from './PromptList'
+import { BlockingIssues } from './PromptPreview'
 
 interface BatchPanelProps {
   text: string
@@ -59,39 +60,13 @@ export function BatchPanel({ text, onTextChange, prompts, issues, onCopy, onCopy
 
       <BlockingIssues issues={issues} />
 
-      {prompts.length > 0 && (
-        <>
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              {prompts.length} {prompts.length === 1 ? 'prompt' : 'prompts'}
-            </h2>
-            <CopyButton disabled={blocked} onCopy={onCopyAll} label="Copy all" />
-          </div>
-          <ol className="flex flex-col gap-3">
-            {prompts.map((prompt, i) => (
-              <li key={i} className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">#{i + 1}</span>
-                  <button
-                    type="button"
-                    className={buttonClass}
-                    disabled={blocked}
-                    onClick={() => onCopy(prompt, `Copied prompt #${i + 1}`)}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <pre
-                  data-testid="batch-prompt"
-                  className="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
-                >
-                  {prompt}
-                </pre>
-              </li>
-            ))}
-          </ol>
-        </>
-      )}
+      <PromptList
+        items={prompts.map((prompt, i) => ({ title: `#${i + 1}`, prompt, copiedLabel: `Copied prompt #${i + 1}` }))}
+        blocked={blocked}
+        testId="batch-prompt"
+        onCopy={onCopy}
+        onCopyAll={onCopyAll}
+      />
     </section>
   )
 }

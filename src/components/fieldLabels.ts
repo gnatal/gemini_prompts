@@ -17,6 +17,7 @@ const LABELS: Record<string, string> = {
   'asset.action': 'Action',
   'asset.heldItems': 'Held items',
   'asset.frameCount': 'Frame count',
+  'asset.frameLayout': 'Layout',
   'asset.framing': 'Framing',
   'asset.backgroundColor': 'Background color',
   'asset.lighting': 'Lighting',

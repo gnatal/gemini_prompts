@@ -27,7 +27,10 @@ export function PromptPreview({ prompt, issues, onCopy }: PromptPreviewProps) {
   )
 }
 
-export function BlockingIssues({ issues }: { issues: ValidationIssue[] }) {
+/** An issue can carry its own label when its field isn't a form path. */
+export type BlockingIssue = ValidationIssue & { label?: string }
+
+export function BlockingIssues({ issues }: { issues: BlockingIssue[] }) {
   if (!issues.length) return null
   return (
     <div
@@ -43,7 +46,7 @@ export function BlockingIssues({ issues }: { issues: ValidationIssue[] }) {
               className="text-left underline decoration-red-300 underline-offset-2"
               onClick={() => focusField(issue.field)}
             >
-              {fieldLabel(issue.field)}
+              {issue.label ?? fieldLabel(issue.field)}
             </button>
             : {issue.message}
           </li>

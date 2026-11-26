@@ -1,10 +1,10 @@
 import { Controller, useFormContext, useWatch } from 'react-hook-form'
-import { applyAssetPreset, syncFrameCount, usesChromaKey } from '../config/assetPresets'
+import { applyAssetPreset, syncFrameCount, syncFrameLayout, usesChromaKey } from '../config/assetPresets'
 import { CHROMA_GREEN, CHROMA_MAGENTA } from '../config/defaults'
 import { FIELD_HELP } from '../config/fieldHelp'
 import { ASPECT_RATIO_LABELS, ASPECT_RATIOS, ASSET_TYPE_LABELS, ASSET_TYPES, VIEW_LABELS, VIEWS } from '../config/labels'
 import { deepEqual } from '../lib/deepEqual'
-import type { AssetRequest, AssetType, FormValues } from '../types'
+import type { AssetRequest, AssetType, FormValues, FrameLayout } from '../types'
 import { ColorInput } from './ColorInput'
 import { buttonClass, Field, inputClass } from './Field'
 import { InfoTip } from './InfoTip'
@@ -54,7 +54,8 @@ export function AssetSection() {
         </Field>
 
         {type === 'sprite-strip' && (
-          <Field field="asset.frameCount" label="Frames" htmlFor="asset-frameCount" hint="2 to 12, in one row">
+          <div className="flex gap-2">
+          <Field field="asset.frameCount" label="Frames" htmlFor="asset-frameCount" hint="2 to 12" className="w-24">
             <input
               id="asset-frameCount"
               type="number"
@@ -75,6 +76,28 @@ export function AssetSection() {
               })}
             />
           </Field>
+          <Field field="asset.frameLayout" label="Layout" htmlFor="asset-frameLayout" className="flex-1">
+            <Controller
+              control={control}
+              name="asset.frameLayout"
+              render={({ field }) => (
+                <select
+                  id="asset-frameLayout"
+                  className={inputClass}
+                  ref={field.ref}
+                  value={field.value ?? 'row'}
+                  onBlur={field.onBlur}
+                  onChange={(e) =>
+                    replaceAsset(syncFrameLayout(getValues('asset'), e.target.value as FrameLayout))
+                  }
+                >
+                  <option value="row">One row</option>
+                  <option value="grid">Grid</option>
+                </select>
+              )}
+            />
+          </Field>
+          </div>
         )}
       </div>
 

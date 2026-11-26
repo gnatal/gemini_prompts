@@ -1,5 +1,5 @@
 import { ART_STYLE_LABELS, ASSET_TYPE_LABELS, VIEW_LABELS } from '../config/labels'
-import { usesChromaKey } from '../config/assetPresets'
+import { gridFor, usesChromaKey } from '../config/assetPresets'
 import type { AssetRequest, CharacterData, PaletteColor, StyleData } from '../types'
 import { normalizeHex } from './color'
 
@@ -58,11 +58,18 @@ export function formatAspectRatio(asset: AssetRequest): string {
   return asset.aspectRatio === 'custom' ? clean(asset.customAspectRatio) : asset.aspectRatio
 }
 
+function formatFrames(asset: AssetRequest): string | undefined {
+  if (asset.type !== 'sprite-strip' || !asset.frameCount) return undefined
+  if (asset.frameLayout !== 'grid') return `${asset.frameCount}, in one horizontal row`
+  const { columns, rows } = gridFor(asset.frameCount)
+  return `${asset.frameCount}, in a grid of ${columns} columns and ${rows} rows, read left to right, top to bottom`
+}
+
 export function buildAssetBlock(asset: AssetRequest): string | null {
-  const isStrip = asset.type === 'sprite-strip'
+  const isGrid = asset.type === 'sprite-strip' && asset.frameLayout === 'grid'
   return renderBlock('[ASSET]', [
-    ['Type', ASSET_TYPE_LABELS[asset.type]],
-    ['Frames', isStrip && asset.frameCount ? `${asset.frameCount}, in one horizontal row` : undefined],
+    ['Type', isGrid ? 'Sprite sheet' : ASSET_TYPE_LABELS[asset.type]],
+    ['Frames', formatFrames(asset)],
     ['Subject', asset.includeCharacter ? undefined : asset.subject],
     ['Action', asset.action],
     ['Held items', asset.includeCharacter ? asset.heldItems : undefined],

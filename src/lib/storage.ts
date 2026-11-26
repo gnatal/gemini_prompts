@@ -1,5 +1,12 @@
 import type { z } from 'zod'
 import {
+  ANIMATION_PRESETS,
+  ANIMATION_PRESETS_VERSION,
+  DEFAULT_FRAME_LAYOUT,
+  defaultAnimations,
+} from '../config/animations'
+import {
+  animationSpecSchema,
   assetRequestSchema,
   characterProfileSchema,
   EXPORT_FORMAT,
@@ -7,7 +14,7 @@ import {
   styleProfileSchema,
   type ExportFile,
 } from '../schemas'
-import type { AssetRequest, CharacterProfile, StyleProfile } from '../types'
+import type { AnimationSpec, AssetRequest, CharacterProfile, FrameLayout, StyleProfile } from '../types'
 
 export const STORAGE_KEYS = {
   styles: 'apb:styles',
@@ -15,6 +22,7 @@ export const STORAGE_KEYS = {
   version: 'apb:version',
   selection: 'apb:selection',
   asset: 'apb:asset',
+  animations: 'apb:animations',
 } as const
 
 export const SCHEMA_VERSION = 1
@@ -126,6 +134,47 @@ export function saveSelection(selection: Selection, storage = getStorage()): boo
 
 export function saveAssetDraft(asset: AssetRequest, storage = getStorage()): boolean {
   return writeJson(storage, STORAGE_KEYS.asset, asset)
+}
+
+export interface AnimationSettings {
+  layout: FrameLayout
+  animations: AnimationSpec[]
+}
+
+export function defaultAnimationSettings(): AnimationSettings {
+  return { layout: DEFAULT_FRAME_LAYOUT, animations: defaultAnimations() }
+}
+
+/**
+ * Presets stored by an older version get the current motion and poses, keeping
+ * the user's on/off, frame count and loop choices. Custom animations are kept as is.
+ */
+function refreshPresets(list: AnimationSpec[]): AnimationSpec[] {
+  const presets = new Map(ANIMATION_PRESETS.map((p) => [p.id, p]))
+  return list.map((a) => {
+    const preset = presets.get(a.id)
+    return preset ? { ...a, motion: preset.motion, keyPoses: [...preset.keyPoses] } : a
+  })
+}
+
+/**
+ * The Animations tab settings. Version 1 stored a bare list; later versions store
+ * `{ version, layout, animations }`. Falls back to the presets when nothing valid is stored.
+ */
+export function loadAnimations(storage: KeyValueStorage | null = getStorage()): AnimationSettings {
+  if (!storage) return defaultAnimationSettings()
+  const raw = readJson(storage, STORAGE_KEYS.animations)
+  const isObject = typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+  const stored = isObject ? (raw as Record<string, unknown>) : { version: 1, animations: raw }
+  const list = readList(animationSpecSchema, stored.animations)
+  if (!list.length) return defaultAnimationSettings()
+  const version = typeof stored.version === 'number' ? stored.version : 1
+  const layout = stored.layout === 'row' || stored.layout === 'grid' ? stored.layout : DEFAULT_FRAME_LAYOUT
+  return { layout, animations: version < ANIMATION_PRESETS_VERSION ? refreshPresets(list) : list }
+}
+
+export function saveAnimations(settings: AnimationSettings, storage = getStorage()): boolean {
+  return writeJson(storage, STORAGE_KEYS.animations, { version: ANIMATION_PRESETS_VERSION, ...settings })
 }
 
 export function exportProfiles(
