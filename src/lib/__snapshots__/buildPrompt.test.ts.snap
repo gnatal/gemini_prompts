@@ -1,0 +1,28 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildPrompt > builds the full prompt in a stable field order 1`] = `
+"[STYLE]
+Art style: Pixel art, 64x64 sprite resolution
+Palette: Royal blue #1E4FD8 (helmet, boots); Sky blue #7EC8F2 (bodysuit); Brass #C9A13B (buckle, spurs)
+Lines and shading: thick dark outlines, 2-tone cel shading, no gradients
+
+[CHARACTER]
+Name: Rex Ranger
+Proportions: 4 heads tall, small torso, oversized boots
+Head: round blue helmet with a short vertical fin, large round eyes
+Torso: sky blue bodysuit with a brass belt buckle
+Arms and hands: dark blue fingerless gloves
+Legs and feet: oversized royal blue boots with brass spurs
+Signature details: red scarf trailing behind; brass star on the belt buckle; fin on the helmet
+
+[ASSET]
+Type: Sprite
+Action: running
+Held items: revolver in the right hand
+View: Side view, facing right
+Framing: full body, centered, nothing cropped, small margin on all sides
+Background: solid flat #00FF00, no shadows or texture
+Lighting: even and neutral, from upper left
+Aspect ratio: 1:1
+Exclude: no text, no logos, no watermark, no extra characters"
+`;
