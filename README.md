@@ -19,6 +19,7 @@ npm run lint     # oxlint
 ## Where things live
 
 - `src/lib/` holds all prompt logic as pure functions (`buildPrompt`, `buildBatch`, `lint`, `color`, `storage`), so it can be reused from a CLI or an API integration later.
+- `src/lib/buildFrames.ts` builds the one-prompt-per-frame animation prompts, and `src/lib/glue.ts` does the Glue tab's image work (background removal, alignment, sheet packing) on plain RGBA buffers, so it is tested without a browser. `src/lib/imageIO.ts` is the thin canvas layer around it.
 - `src/schemas.ts` has zod schemas that mirror `src/types.ts`. Structural schemas validate localStorage and imported files. `formSchema` holds the rules that block the Copy button.
 - `src/config/` has the asset type presets, the batch action lists, the IP blocklist (`ipBlocklist.ts`, editable) and the defaults.
 

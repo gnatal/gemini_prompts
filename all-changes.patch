@@ -1,0 +1,2990 @@
+diff --git a/README.md b/README.md
+index d15f5aa..e9931b7 100644
+--- a/README.md
++++ b/README.md
+@@ -19,6 +19,7 @@ npm run lint     # oxlint
+ ## Where things live
+ 
+ - `src/lib/` holds all prompt logic as pure functions (`buildPrompt`, `buildBatch`, `lint`, `color`, `storage`), so it can be reused from a CLI or an API integration later.
++- `src/lib/buildFrames.ts` builds the one-prompt-per-frame animation prompts, and `src/lib/glue.ts` does the Glue tab's image work (background removal, alignment, sheet packing) on plain RGBA buffers, so it is tested without a browser. `src/lib/imageIO.ts` is the thin canvas layer around it.
+ - `src/schemas.ts` has zod schemas that mirror `src/types.ts`. Structural schemas validate localStorage and imported files. `formSchema` holds the rules that block the Copy button.
+ - `src/config/` has the asset type presets, the batch action lists, the IP blocklist (`ipBlocklist.ts`, editable) and the defaults.
+ 
+diff --git a/project.md b/project.md
+index 5b3996c..b26ee5c 100644
+--- a/project.md
++++ b/project.md
+@@ -141,6 +141,7 @@ Rules:
+ - When `includeCharacter` is false, omit the whole `[CHARACTER]` block.
+ - When `hasReferenceImage` is true and the character is included, start the prompt with: `Use the attached reference image as the exact design of the character. Keep every detail identical.`
+ - For `sprite-strip`, add `Frames: N, in one horizontal row` after `Type`.
++- When any character field or `heldItems` says "left" or "right", end the `[CHARACTER]` block with `Sides: left and right always mean the character's own left and right, not the viewer's`. Without it, the model read the hands from the character's side but the star, scar and pants hole from the viewer's side, in the same image. Fill from prompt ignores this line.
+ 
+ ## Batch mode
+ 
+@@ -156,12 +157,38 @@ A third output tab that generates one sprite strip prompt per animation, for bui
+ - Each row has an on/off toggle, a frame count (2 to 12), a loop toggle, and an expandable motion and frame-poses editor. Custom animations can be added and removed. The list is saved under `apb:animations`.
+ - Sheet layout, shared by all animations and saved with them: **Grid** (default) or **One row**. The grid uses equal square cells, near square (4 → 2×2, 6 → 3×2, 8 → 4×2, 12 → 4×3), so the sheet can be cut into equal cells and stays within the aspect ratios image models support. One row is `N:1`.
+ - Each prompt forces type `sprite-strip` (shown as `Sprite sheet` in grid layout), the character on, `Frames: N` with the layout, matching framing and aspect ratio (`columns:rows` reduced, or `N:1`). View, held items, background, lighting and exclusions come from the Asset section. The Style and Character blocks are byte-identical to every other prompt.
+-- An `[ANIMATION]` block follows `[ASSET]`: name, loop, layout, a `Limbs:` legend when poses use near/far (and which side is near, for side views), one `Frame N:` line per pose (with `(row R, column C)` in grid layout, only when the pose count equals the frame count), a no-motion-blur line and a consistency line.
++- An `[ANIMATION]` block follows `[ASSET]`: name, loop, layout, a `View lock:` line, a `Limbs:` legend when poses use near/far (and which side is near, for side views), a `Props:` line when there are held items, one `Frame N:` line per pose (with `(row R, column C)` in grid layout, only when the pose count equals the frame count), a no-motion-blur line and a consistency line.
+ - Walk, run and climb poses name limbs **near** (closer to the camera) and **far**, never left and right. The model loses track of left and right, which made the same leg lead in every frame. The second half of each cycle is the first half with near and far swapped, every frame has an arm position, and both run flight frames require a visible gap under the feet.
++- `View lock:` repeats the view for every frame, including the first and last, and for side views adds that the character never turns toward the camera. Poses with no direction in them ("neutral standing pose", "body leans back") came out facing the camera.
++- The `Limbs:` legend also asks for the far arm and leg to be drawn darker, in shadow. With identical boots and sleeves the model had nothing to tell the legs apart by, and drew one stride in every frame.
++- `Props:` repeats the held items "in every frame; nothing appears, disappears or changes hands". Weapons popped in and out and switched hands between frames.
++- Preset wording avoids "the second half repeats the first half", which the model drew as a literal copy, and uses "the second half of the cycle is not a copy of the first half: the opposite leg leads". The walk passing pose is described by its silhouette (legs together under the hips). Standing poses say "facing the same way as the other frames".
+ - When the view is not a side view, the tab shows a warning with a one-click switch to side view.
+ - Stored lists carry a presets version. Presets saved by an older version get the new motion and poses, and keep their on/off, frame count and loop settings.
+ - Copying is blocked when no animation is on, when an enabled animation has an invalid frame count, or by the usual form rules.
+ 
++### One prompt per frame
++
++An **Output** switch at the top of the Animations tab: **One sheet per animation** (the sheet prompts above) or **One prompt per frame** (`src/lib/buildFrames.ts`). Sheets kept failing in the same way: the model drew the second half of a walk or run as a copy of the first, so the same leg led in every frame. Image models are good at one pose and bad at keeping motion straight across a grid, so this mode gives every key pose its own prompt.
++
++- Each frame is a normal single-sprite prompt: `Type: Sprite`, `Action:` the frame's pose, `Aspect ratio: 1:1`, and a fixed framing so separate generations line up: full body, centered, about 80% of the image height when standing, ground line 10% above the bottom edge, airborne poses above it (plus "same scale and position as the reference image" when the character has one). Style and Character blocks are byte-identical to every other prompt.
++- A `[FRAME]` block follows: `Animation: Run, frame 5 of 8, part of a looping cycle`, the motion (without sheet-only clauses about cycle halves), the view lock, the limbs legend, props, `Single pose: exactly one character in one pose, not a sprite sheet...` and a consistency line.
++- In an even near/far cycle, a second-half frame that is the near/far swap of a first-half frame gets `Based on: frame N. Attach your approved frame N as a second reference image and draw that exact pose with the opposite leg and arm leading...`. The UI tags those frames "attach frame N too" and says to generate the first half first.
++- Frames are grouped per animation, each frame with its own Copy button, plus Copy per animation and Copy all. A workflow note explains the order (idle first as the reference, attach it everywhere, first half before second half, then the Glue tab) and warns when the character has no reference image.
++- Copying is blocked for enabled animations whose pose count doesn't match the frame count.
++- The choice is saved with the animations as `output: 'sheet' | 'frames'`.
++
++## Glue tab
++
++A fourth output tab that turns generated images into one clean, aligned sprite sheet, entirely in the browser (`src/lib/glue.ts` for the pure image work, `src/lib/imageIO.ts` for canvas and files, `src/components/GluePanel.tsx`).
++
++- **Input:** several images (one per frame, sorted by file name with numbers in order) or a single image, which is treated as a sheet and cut into a columns × rows grid (starting guess: 4 columns, rows from the aspect ratio), trimming 3 px from every cell edge to drop grid lines.
++- **Background removal:** the key color is the per-channel median of the image border, so it works on the off-green that generators actually produce. Pixels near it become transparent with a soft edge, and edge pixels lose their green spill. A strength slider sets the tolerance.
++- **Alignment:** every frame's content box is found (ignoring stray pixels). Grounded frames get their feet on one baseline. Frames whose feet are well above the ground (3% of the image height) count as airborne and keep their lift; the ground is the 75th percentile of the feet, since half of a run's frames can be in the air. Each frame can be forced to "On the ground" or "In the air". Horizontally, the head (mean x of the top 15% of the content) or the body center goes on the cell's center line.
++- **Per-frame fixes:** size %, x and y offsets, move up or down, remove. Each row shows a thumbnail of its cell.
++- **Output:** a grid (near-square, same as the animation sheets) or one row of equal cells, padded. A looping preview with a speed slider, the sheet with its cell size (for importing into an engine), and **Download sheet PNG** with a transparent background, at 100%, 50%, 25% or 12.5%, with an optional sharp (nearest-neighbor) scaling for pixel art.
++- The panel stays mounted while hidden, so loaded frames survive switching tabs. Nothing is uploaded anywhere.
++
+ ## Fill from prompt
+ 
+ A header button opens a panel where a prompt can be pasted and read back into the form (`src/lib/parsePrompt.ts`, pure, the inverse of `buildPrompt`).
+@@ -186,6 +213,12 @@ These are warnings, not blockers. Show each one inline next to its field and in
+ 5. **Chroma key clash.** Warn if the background color is within an RGB distance of 100 of any palette color, and suggest magenta `#FF00FF` as an alternative.
+ 6. **Missing "no text".** Warn if `exclusions` has no entry containing "text".
+ 7. **Ambiguous hands.** If `heldItems` is filled in but has neither "left" nor "right", hint: "Say which hand, from the character's perspective."
++8. **Palette name vs hex.** Warn when a color word in the name (red, blue, indigo, gold, teal...) doesn't match the hex's hue, and say what color the hex really is. Grays and names without a color word are skipped. "Indigo #D2452D" and "Torii red #264478" made the model mix both colors everywhere.
++9. **Text while excluding text.** Warn when a character field, held items or subject asks for writing (a quoted phrase, or words like kanji, lettering, inscription) and Exclude has "no text".
++10. **Mood lighting on a sprite.** Warn when a sprite, strip, portrait or icon has moonlight, sunset, dramatic, rim light, neon or night lighting. It gets baked into the asset and looks wrong in other scenes.
++11. **Warm vs cold lighting.** Warn when Lines and shading and Lighting pull in opposite directions (warm/sunny vs cold/moonlight). A warm and cold split inside one field is allowed. Skipped when rule 10 already fired.
++12. **Same gear held and worn.** Warn when held items and an outfit field both name a gun, or both name a blade, unless the outfit clause says "empty". "A gun in the right side" plus "a pistol in the right hand" got drawn as two pistols.
++13. **Proportions in heads.** Warn when Proportions has no "N heads tall". "1 head" came out as realistic adult proportions.
+ 
+ ## Validation
+ 
+diff --git a/src/App.test.tsx b/src/App.test.tsx
+index 6b2a19c..4a3a496 100644
+--- a/src/App.test.tsx
++++ b/src/App.test.tsx
+@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react'
+ import userEvent from '@testing-library/user-event'
+ import { afterEach, describe, expect, it, vi } from 'vitest'
+ import App from './App'
++import { defaultAnimations } from './config/animations'
+ import { STORAGE_KEYS } from './lib/storage'
+ 
+ const preview = () => screen.getByTestId('prompt-preview')
+@@ -336,4 +337,27 @@ describe('App', () => {
+     expect(preview()).toHaveTextContent('Frames: 8, in a grid of 4 columns and 2 rows')
+     expect(preview()).toHaveTextContent('Signature details: a pearl collar; a red waistband')
+   })
++
++  it('switches the animations to one prompt per frame and points to the Glue tab', async () => {
++    const user = userEvent.setup()
++    render(<App />)
++    await user.click(screen.getByRole('tab', { name: 'Animations' }))
++    const panel = screen.getByRole('region', { name: 'Animations' })
++    await user.click(within(panel).getByLabelText('One prompt per frame'))
++
++    const expected = defaultAnimations()
++      .filter((a) => a.enabled)
++      .reduce((n, a) => n + (a.frames ?? 0), 0)
++    expect(screen.queryAllByTestId('animation-prompt')).toHaveLength(0)
++    const frames = screen.getAllByTestId('frame-prompt')
++    expect(frames).toHaveLength(expected)
++    expect(frames[0].textContent).toContain('Single pose: exactly one character in one pose')
++    expect(within(panel).getByText(/Turn on “I will attach an approved reference image”/)).toBeInTheDocument()
++
++    expect(screen.queryByRole('region', { name: 'Glue frames' })).not.toBeInTheDocument()
++    await user.click(within(panel).getByRole('button', { name: 'Open the Glue tab' }))
++    expect(screen.getByRole('tab', { name: 'Glue' })).toHaveAttribute('aria-selected', 'true')
++    expect(screen.getByRole('region', { name: 'Glue frames' })).toBeVisible()
++    expect(screen.getByLabelText('Frame images')).toBeInTheDocument()
++  })
+ })
+diff --git a/src/App.tsx b/src/App.tsx
+index 65afcc3..c0ee378 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -5,6 +5,7 @@ import { AssetSection } from './components/AssetSection'
+ import { BatchPanel } from './components/BatchPanel'
+ import { CharacterSection } from './components/CharacterSection'
+ import { FeedbackContext, type Feedback } from './components/feedback'
++import { GluePanel } from './components/GluePanel'
+ import { buttonClass } from './components/Field'
+ import { LintSummary } from './components/LintSummary'
+ import type { ProfileControls } from './components/ProfileBar'
+@@ -15,6 +16,7 @@ import { Toast } from './components/Toast'
+ import { defaultAsset, defaultCharacter, defaultStyle } from './config/defaults'
+ import { animationAsset, buildAnimationSet, validateAnimations } from './lib/buildAnimations'
+ import { buildBatch, joinBatch, parseActions } from './lib/buildBatch'
++import { buildFrameSet, validateFrameMode } from './lib/buildFrames'
+ import { buildPrompt } from './lib/buildPrompt'
+ import { copyText, downloadText } from './lib/clipboard'
+ import { deepEqual } from './lib/deepEqual'
+@@ -50,9 +52,9 @@ function loadInitial() {
+   return { stored, values }
+ }
+ 
+-type Tab = 'single' | 'batch' | 'animations'
++type Tab = 'single' | 'batch' | 'animations' | 'glue'
+ 
+-const TAB_LABELS: Record<Tab, string> = { single: 'Single prompt', batch: 'Batch', animations: 'Animations' }
++const TAB_LABELS: Record<Tab, string> = { single: 'Single prompt', batch: 'Batch', animations: 'Animations', glue: 'Glue' }
+ type Notice = { kind: 'error' | 'info'; text: string }
+ 
+ export default function App() {
+@@ -69,7 +71,7 @@ export default function App() {
+   const [tab, setTab] = useState<Tab>('single')
+   const [batchText, setBatchText] = useState('')
+   const [animationSettings, setAnimationSettings] = useState(loadAnimations)
+-  const { animations, layout } = animationSettings
++  const { animations, layout, output } = animationSettings
+   const [toast, setToast] = useState<string | null>(null)
+   const [notice, setNotice] = useState<Notice | null>(null)
+   const [pasteOpen, setPasteOpen] = useState(false)
+@@ -98,8 +100,10 @@ export default function App() {
+   const animationPrompts = buildAnimationSet(values.style, values.character, values.asset, animations, layout)
+   // Each animation supplies its own action, frames and framing, so only the other form rules apply.
+   const firstAnimation = animationPrompts[0]?.spec
++  const frameSets = output === 'frames' ? buildFrameSet(values.style, values.character, values.asset, animations) : []
+   const animationIssues = [
+     ...validateAnimations(animations),
++    ...(output === 'frames' ? validateFrameMode(animations) : []),
+     ...(firstAnimation ? validateForm({ ...values, asset: animationAsset(values.asset, firstAnimation, layout) }) : []),
+   ]
+ 
+@@ -255,12 +259,16 @@ export default function App() {
+   const batchBlocked = batchIssues.length > 0 || batchPrompts.length === 0
+   const copyAll = () =>
+     copy(joinBatch(batchPrompts), `Copied ${batchPrompts.length} ${batchPrompts.length === 1 ? 'prompt' : 'prompts'}`)
+-  const animationsBlocked = animationIssues.length > 0 || animationPrompts.length === 0
++  const framePrompts = frameSets.flatMap((s) => s.frames.map((f) => f.prompt))
++  const animationOutputCount = output === 'frames' ? framePrompts.length : animationPrompts.length
++  const animationsBlocked = animationIssues.length > 0 || animationOutputCount === 0
+   const copyAllAnimations = () =>
+-    copy(
+-      joinBatch(animationPrompts.map((a) => a.prompt)),
+-      `Copied ${animationPrompts.length} animation ${animationPrompts.length === 1 ? 'prompt' : 'prompts'}`,
+-    )
++    output === 'frames'
++      ? copy(joinBatch(framePrompts), `Copied ${framePrompts.length} frame ${framePrompts.length === 1 ? 'prompt' : 'prompts'}`)
++      : copy(
++          joinBatch(animationPrompts.map((a) => a.prompt)),
++          `Copied ${animationPrompts.length} animation ${animationPrompts.length === 1 ? 'prompt' : 'prompts'}`,
++        )
+ 
+   return (
+     <div className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+@@ -333,7 +341,7 @@ export default function App() {
+ 
+             <aside className="flex min-w-0 flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+               <div role="tablist" aria-label="Output mode" className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
+-                {(['single', 'batch', 'animations'] as const).map((t) => (
++                {(['single', 'batch', 'animations', 'glue'] as const).map((t) => (
+                   <button
+                     key={t}
+                     type="button"
+@@ -352,7 +360,7 @@ export default function App() {
+                 ))}
+               </div>
+ 
+-              <LintSummary warnings={warnings} />
++              {tab !== 'glue' && <LintSummary warnings={warnings} />}
+ 
+               {tab === 'single' && <PromptPreview prompt={prompt} issues={issues} onCopy={() => copy(prompt)} />}
+               {tab === 'batch' && (
+@@ -371,6 +379,11 @@ export default function App() {
+                   onChange={(list) => setAnimationSettings((s) => ({ ...s, animations: list }))}
+                   layout={layout}
+                   onLayoutChange={(next) => setAnimationSettings((s) => ({ ...s, layout: next }))}
++                  output={output}
++                  onOutputChange={(next) => setAnimationSettings((s) => ({ ...s, output: next }))}
++                  frameSets={frameSets}
++                  hasReferenceImage={values.character.hasReferenceImage}
++                  onOpenGlue={() => setTab('glue')}
+                   view={values.asset.view}
+                   onUseSideView={() => form.setValue('asset.view', 'side-right', { shouldDirty: true })}
+                   prompts={animationPrompts}
+@@ -379,13 +392,20 @@ export default function App() {
+                   onCopyAll={copyAllAnimations}
+                 />
+               )}
++              {/* Kept mounted so loaded frames survive switching tabs. */}
++              <div hidden={tab !== 'glue'}>
++                <GluePanel />
++              </div>
+             </aside>
+           </main>
+         </FeedbackContext.Provider>
+       </FormProvider>
+ 
+       {/* Mobile: sticky copy bar */}
+-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
++      <div
++        hidden={tab === 'glue'}
++        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95"
++      >
+         {tab === 'single' && (
+           <CopyButton disabled={singleBlocked} onCopy={() => copy(prompt)} className="w-full py-2.5" />
+         )}
+@@ -401,7 +421,7 @@ export default function App() {
+           <CopyButton
+             disabled={animationsBlocked}
+             onCopy={copyAllAnimations}
+-            label={`Copy all (${animationPrompts.length})`}
++            label={`Copy all (${animationOutputCount})`}
+             className="w-full py-2.5"
+           />
+         )}
+diff --git a/src/components/AnimationPanel.tsx b/src/components/AnimationPanel.tsx
+index db136bc..a0aae06 100644
+--- a/src/components/AnimationPanel.tsx
++++ b/src/components/AnimationPanel.tsx
+@@ -4,9 +4,11 @@ import { FIELD_HELP } from '../config/fieldHelp'
+ import { gridFor } from '../config/assetPresets'
+ import { VIEW_LABELS } from '../config/labels'
+ import { type AnimationPrompt, isSideView, usableKeyPoses } from '../lib/buildAnimations'
++import type { AnimationFrames } from '../lib/buildFrames'
+ import { newId } from '../lib/storage'
+-import type { AnimationSpec, FrameLayout, View } from '../types'
++import type { AnimationOutput, AnimationSpec, FrameLayout, View } from '../types'
+ import { buttonClass, inputClass } from './Field'
++import { FramePromptList } from './FramePromptList'
+ import { InfoTip } from './InfoTip'
+ import { PromptList } from './PromptList'
+ import { type BlockingIssue, BlockingIssues } from './PromptPreview'
+@@ -16,6 +18,13 @@ interface AnimationPanelProps {
+   onChange: (animations: AnimationSpec[]) => void
+   layout: FrameLayout
+   onLayoutChange: (layout: FrameLayout) => void
++  output: AnimationOutput
++  onOutputChange: (output: AnimationOutput) => void
++  /** Frame prompts, used when `output` is 'frames'. */
++  frameSets: AnimationFrames[]
++  /** Whether the character section says a reference image will be attached. */
++  hasReferenceImage: boolean
++  onOpenGlue: () => void
+   /** The view from the Asset section, shared by every animation. */
+   view: View
+   onUseSideView: () => void
+@@ -41,6 +50,63 @@ function posesHint(spec: AnimationSpec): string {
+   return `${lines} poses but ${spec.frames ?? 0} frames, so the poses are left out. Match the counts to use them.`
+ }
+ 
++const OUTPUTS: { value: AnimationOutput; label: string; hint: string }[] = [
++  {
++    value: 'sheet',
++    label: 'One sheet per animation',
++    hint: 'One prompt draws every frame. Fast, but the model often copies the first half of a walk or run into the second, so the legs never alternate.',
++  },
++  {
++    value: 'frames',
++    label: 'One prompt per frame',
++    hint: 'Each pose is its own single-sprite prompt, which image models handle far better. Glue the results together in the Glue tab.',
++  },
++]
++
++function SegmentedControl<T extends string>({
++  name,
++  legend,
++  options,
++  value,
++  onChange,
++}: {
++  name: string
++  legend: string
++  options: { value: T; label: string; hint: string }[]
++  value: T
++  onChange: (value: T) => void
++}) {
++  return (
++    <fieldset className="flex flex-col gap-1">
++      <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">{legend}</legend>
++      <div className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
++        {options.map((o) => (
++          <label
++            key={o.value}
++            className={
++              'flex-1 cursor-pointer rounded-md px-3 py-1 text-center text-sm font-medium ' +
++              (value === o.value
++                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
++                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white')
++            }
++          >
++            <input
++              type="radio"
++              name={name}
++              value={o.value}
++              checked={value === o.value}
++              onChange={() => onChange(o.value)}
++              className="sr-only"
++            />
++            {o.label}
++          </label>
++        ))}
++      </div>
++      <p className="text-xs text-slate-500 dark:text-slate-400">{options.find((o) => o.value === value)?.hint}</p>
++    </fieldset>
++  )
++}
++
+ const LAYOUTS: { value: FrameLayout; label: string; hint: string }[] = [
+   { value: 'grid', label: 'Grid', hint: 'Equal square cells, e.g. 8 frames as 4×2. Easy to cut, and fits image models that cap the aspect ratio.' },
+   { value: 'row', label: 'One row', hint: 'All frames side by side (N:1). Very wide sheets often come out squashed or unevenly spaced.' },
+@@ -58,6 +124,11 @@ export function AnimationPanel({
+   onChange,
+   layout,
+   onLayoutChange,
++  output,
++  onOutputChange,
++  frameSets,
++  hasReferenceImage,
++  onOpenGlue,
+   view,
+   onUseSideView,
+   prompts,
+@@ -98,38 +169,48 @@ export function AnimationPanel({
+           <InfoTip label="animations" help={FIELD_HELP['animations.list']} />
+         </div>
+         <p className="text-xs text-slate-500 dark:text-slate-400">
+-          One sprite strip prompt per animation. View, held items, background, lighting and exclusions come from the
+-          Asset section. {enabledCount} of {animations.length} on.
++          View, held items, background, lighting and exclusions come from the Asset section. {enabledCount} of{' '}
++          {animations.length} on.
+         </p>
+       </div>
+ 
+-      <fieldset className="flex flex-col gap-1">
+-        <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">Sheet layout</legend>
+-        <div className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
+-          {LAYOUTS.map((l) => (
+-            <label
+-              key={l.value}
+-              className={
+-                'flex-1 cursor-pointer rounded-md px-3 py-1 text-center text-sm font-medium ' +
+-                (layout === l.value
+-                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white')
+-              }
+-            >
+-              <input
+-                type="radio"
+-                name="animation-layout"
+-                value={l.value}
+-                checked={layout === l.value}
+-                onChange={() => onLayoutChange(l.value)}
+-                className="sr-only"
+-              />
+-              {l.label}
+-            </label>
+-          ))}
++      <SegmentedControl name="animation-output" legend="Output" options={OUTPUTS} value={output} onChange={onOutputChange} />
++
++      {output === 'sheet' && (
++        <SegmentedControl
++          name="animation-layout"
++          legend="Sheet layout"
++          options={LAYOUTS}
++          value={layout}
++          onChange={onLayoutChange}
++        />
++      )}
++
++      {output === 'frames' && (
++        <div
++          role="note"
++          aria-label="Frame workflow"
++          className="flex flex-col gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100"
++        >
++          <ol className="list-decimal space-y-1 pl-5">
++            <li>Generate the idle as a single prompt and keep the best result as your reference image.</li>
++            <li>Attach that reference to every frame prompt.</li>
++            <li>Frames tagged “attach frame N too” build on an earlier frame, so generate the first half first.</li>
++            <li>Drop the finished frames into the Glue tab to line them up into one sheet.</li>
++          </ol>
++          {!hasReferenceImage && (
++            <p className="text-amber-800 dark:text-amber-300">
++              ⚠ Turn on “I will attach an approved reference image” in the Character section. Without one, separate
++              generations drift apart.
++            </p>
++          )}
++          <div>
++            <button type="button" className={buttonClass} onClick={onOpenGlue}>
++              Open the Glue tab
++            </button>
++          </div>
+         </div>
+-        <p className="text-xs text-slate-500 dark:text-slate-400">{LAYOUTS.find((l) => l.value === layout)?.hint}</p>
+-      </fieldset>
++      )}
+ 
+       {!isSideView(view) && (
+         <div
+@@ -286,16 +367,20 @@ export function AnimationPanel({
+         </p>
+       )}
+ 
+-      <PromptList
+-        items={prompts.map(({ spec, prompt }) => {
+-          const title = `${spec.name.trim() || 'Untitled'} · ${layoutSummary(spec.frames, layout)}${spec.loop ? ', loop' : ''}`
+-          return { title, prompt, copiedLabel: `Copied ${spec.name.trim() || 'animation'} prompt` }
+-        })}
+-        blocked={blocked}
+-        testId="animation-prompt"
+-        onCopy={onCopy}
+-        onCopyAll={onCopyAll}
+-      />
++      {output === 'frames' ? (
++        <FramePromptList sets={frameSets} blocked={blocked} onCopy={onCopy} onCopyAll={onCopyAll} />
++      ) : (
++        <PromptList
++          items={prompts.map(({ spec, prompt }) => {
++            const title = `${spec.name.trim() || 'Untitled'} · ${layoutSummary(spec.frames, layout)}${spec.loop ? ', loop' : ''}`
++            return { title, prompt, copiedLabel: `Copied ${spec.name.trim() || 'animation'} prompt` }
++          })}
++          blocked={blocked}
++          testId="animation-prompt"
++          onCopy={onCopy}
++          onCopyAll={onCopyAll}
++        />
++      )}
+     </section>
+   )
+ }
+diff --git a/src/components/FramePromptList.tsx b/src/components/FramePromptList.tsx
+new file mode 100644
+index 0000000..7b44545
+--- /dev/null
++++ b/src/components/FramePromptList.tsx
+@@ -0,0 +1,90 @@
++import { joinBatch } from '../lib/buildBatch'
++import type { AnimationFrames } from '../lib/buildFrames'
++import { buttonClass } from './Field'
++import { CopyButton } from './PromptPreview'
++
++interface FramePromptListProps {
++  sets: AnimationFrames[]
++  blocked: boolean
++  onCopy: (text: string, label: string) => void
++  onCopyAll: () => void
++}
++
++/** Frame prompts grouped by animation, each frame with its own Copy button. */
++export function FramePromptList({ sets, blocked, onCopy, onCopyAll }: FramePromptListProps) {
++  if (!sets.length) return null
++  const total = sets.reduce((n, s) => n + s.frames.length, 0)
++  return (
++    <>
++      <div className="flex items-center justify-between">
++        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
++          {total} frame {total === 1 ? 'prompt' : 'prompts'} in {sets.length} {sets.length === 1 ? 'animation' : 'animations'}
++        </h2>
++        <CopyButton disabled={blocked} onCopy={onCopyAll} label="Copy all" />
++      </div>
++      <ol className="flex flex-col gap-2">
++        {sets.map(({ spec, frames }, setIndex) => {
++          const name = spec.name.trim() || 'Untitled'
++          const mirrored = frames.filter((f) => f.basedOn !== null).length
++          return (
++            <li key={spec.id} className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
++              <details open={setIndex === 0} className="group">
++                <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 select-none">
++                  <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
++                    {name} · {frames.length} frames{spec.loop ? ', loop' : ''}
++                    {mirrored > 0 && (
++                      <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
++                        Generate frames 1 to {frames.length - mirrored} first. The last {mirrored} each build on one of them.
++                      </span>
++                    )}
++                  </span>
++                  <button
++                    type="button"
++                    className={buttonClass}
++                    disabled={blocked}
++                    onClick={(e) => {
++                      e.preventDefault()
++                      onCopy(joinBatch(frames.map((f) => f.prompt)), `Copied ${frames.length} ${name} frame prompts`)
++                    }}
++                  >
++                    Copy {frames.length}
++                  </button>
++                </summary>
++                <ol className="flex flex-col gap-3 border-t border-slate-200 px-3 py-2 dark:border-slate-700">
++                  {frames.map((frame) => (
++                    <li key={frame.index} className="flex flex-col gap-1">
++                      <div className="flex items-center justify-between gap-2">
++                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
++                          Frame {frame.index + 1}
++                          {frame.basedOn !== null && (
++                            <span className="ml-1 rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
++                              attach frame {frame.basedOn + 1} too
++                            </span>
++                          )}
++                        </span>
++                        <button
++                          type="button"
++                          className={buttonClass}
++                          disabled={blocked}
++                          onClick={() => onCopy(frame.prompt, `Copied ${name} frame ${frame.index + 1}`)}
++                        >
++                          Copy
++                        </button>
++                      </div>
++                      <pre
++                        data-testid="frame-prompt"
++                        className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
++                      >
++                        {frame.prompt}
++                      </pre>
++                    </li>
++                  ))}
++                </ol>
++              </details>
++            </li>
++          )
++        })}
++      </ol>
++    </>
++  )
++}
+diff --git a/src/components/GluePanel.tsx b/src/components/GluePanel.tsx
+new file mode 100644
+index 0000000..1101eae
+--- /dev/null
++++ b/src/components/GluePanel.tsx
+@@ -0,0 +1,526 @@
++import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
++import { gridFor } from '../config/assetPresets'
++import {
++  type AnchorX,
++  composeSheet,
++  contentBox,
++  DEFAULT_KEY_OPTIONS,
++  DEFAULT_LAYOUT_OPTIONS,
++  detectKeyColor,
++  type FrameMetrics,
++  measure,
++  naturalCompare,
++  planLayout,
++  type RawImage,
++  removeBackground,
++  resize,
++  sliceSheet,
++} from '../lib/glue'
++import { downloadCanvasPng, fileToRaw, paintRaw } from '../lib/imageIO'
++import { newId } from '../lib/storage'
++import { buttonClass, inputClass, primaryButtonClass } from './Field'
++
++interface GlueFrame {
++  id: string
++  name: string
++  raw: RawImage
++  /** Percent, to fix a frame that came out bigger or smaller than the rest. */
++  scale: number
++  dx: number
++  dy: number
++  /** Undefined: detected. */
++  airborne?: boolean
++}
++
++interface SheetSource {
++  name: string
++  raw: RawImage
++  columns: number
++  rows: number
++}
++
++interface Processed {
++  cutout: RawImage
++  metrics: FrameMetrics | null
++}
++
++type SheetLayout = 'grid' | 'row'
++
++const MAX_FRAMES = 24
++const SHEET_INSET = 3
++const compactInput = inputClass.replace('w-full ', '')
++const smallInput = `${compactInput} w-16 px-1.5 py-0.5 text-xs`
++const smallButton = buttonClass.replace('px-2.5 py-1.5 text-sm', 'px-2 py-0.5 text-xs')
++
++/** A small copy of one cell of the composed sheet. */
++function FrameThumb({ source, cell, version }: { source: HTMLCanvasElement | null; cell: { x: number; y: number; w: number; h: number } | null; version: number }) {
++  const ref = useRef<HTMLCanvasElement>(null)
++  useEffect(() => {
++    const canvas = ref.current
++    if (!canvas) return
++    const ctx = canvas.getContext('2d')
++    if (!ctx) return
++    ctx.clearRect(0, 0, canvas.width, canvas.height)
++    if (!source || !cell || !cell.w || !cell.h) return
++    const zoom = canvas.height / cell.h
++    const w = cell.w * zoom
++    ctx.drawImage(source, cell.x, cell.y, cell.w, cell.h, (canvas.width - w) / 2, 0, w, canvas.height)
++  }, [source, cell?.x, cell?.y, cell?.w, cell?.h, version])
++  return <canvas ref={ref} width={40} height={56} className="shrink-0 rounded bg-slate-100 dark:bg-slate-800" aria-hidden="true" />
++}
++
++const newFrame = (name: string, raw: RawImage): GlueFrame => ({ id: newId(), name, raw, scale: 100, dx: 0, dy: 0 })
++
++/** A starting guess for a sheet's grid: 4 columns, rows from the aspect ratio. */
++function guessGrid(raw: RawImage): { columns: number; rows: number } {
++  const columns = 4
++  const rows = Math.min(4, Math.max(1, Math.round((columns * raw.height) / raw.width)))
++  return { columns, rows }
++}
++
++function framesFromSheet(sheet: SheetSource): GlueFrame[] {
++  return sliceSheet(sheet.raw, sheet.columns, sheet.rows, SHEET_INSET).map((raw, i) => newFrame(`${sheet.name} · cell ${i + 1}`, raw))
++}
++
++export function GluePanel() {
++  const [frames, setFrames] = useState<GlueFrame[]>([])
++  const [sheet, setSheet] = useState<SheetSource | null>(null)
++  const [error, setError] = useState<string | null>(null)
++  const [loading, setLoading] = useState(false)
++  const [dragging, setDragging] = useState(false)
++
++  const [tolerance, setTolerance] = useState(DEFAULT_KEY_OPTIONS.tolerance)
++  const [anchor, setAnchor] = useState<AnchorX>(DEFAULT_LAYOUT_OPTIONS.anchor)
++  const [snap, setSnap] = useState(DEFAULT_LAYOUT_OPTIONS.snapToGround)
++  const [padding, setPadding] = useState(DEFAULT_LAYOUT_OPTIONS.padding)
++  const [sheetLayout, setSheetLayout] = useState<SheetLayout>('grid')
++  const [fps, setFps] = useState(10)
++  const [outputScale, setOutputScale] = useState(100)
++  const [pixelArt, setPixelArt] = useState(false)
++
++  const sheetCanvas = useRef<HTMLCanvasElement>(null)
++  const previewCanvas = useRef<HTMLCanvasElement>(null)
++  const cache = useRef(new Map<string, Processed>())
++  const [paintVersion, setPaintVersion] = useState(0)
++
++  // Cut every frame out of its background. Cached, so nudging a frame doesn't redo the work.
++  const processed = useMemo(() => {
++    const keys = new Set<string>()
++    const result = frames.map((f) => {
++      const key = `${f.id}|${f.scale}|${tolerance}`
++      keys.add(key)
++      let hit = cache.current.get(key)
++      if (!hit) {
++        const scaled = resize(f.raw, f.scale / 100)
++        const cutout = removeBackground(scaled, detectKeyColor(scaled), { ...DEFAULT_KEY_OPTIONS, tolerance })
++        const box = contentBox(cutout)
++        hit = { cutout, metrics: box ? measure(cutout, box) : null }
++        cache.current.set(key, hit)
++      }
++      return hit
++    })
++    for (const key of cache.current.keys()) if (!keys.has(key)) cache.current.delete(key)
++    return result
++  }, [frames, tolerance])
++
++  const usable = useMemo(
++    () =>
++      frames
++        .map((frame, i) => ({ frame, ...processed[i] }))
++        .filter((p): p is { frame: GlueFrame; cutout: RawImage; metrics: FrameMetrics } => p.metrics !== null),
++    [frames, processed],
++  )
++  const count = usable.length
++  const columns = sheetLayout === 'row' ? count : gridFor(count).columns
++  const rows = count ? Math.ceil(count / Math.max(1, columns)) : 0
++
++  const layout = useMemo(
++    () =>
++      planLayout(
++        usable.map((u) => u.metrics),
++        { ...DEFAULT_LAYOUT_OPTIONS, anchor, snapToGround: snap, padding },
++        usable.map((u) => ({ dx: u.frame.dx, dy: u.frame.dy, airborne: u.frame.airborne })),
++      ),
++    [usable, anchor, snap, padding],
++  )
++
++  const composed = useMemo(
++    () => (usable.length ? composeSheet(usable.map((u) => u.cutout), layout, columns) : null),
++    [usable, layout, columns],
++  )
++
++  useEffect(() => {
++    if (!sheetCanvas.current || !composed) return
++    paintRaw(sheetCanvas.current, composed)
++    setPaintVersion((v) => v + 1)
++  }, [composed])
++
++  // Preview loop: draws one cell after another from the sheet canvas.
++  useEffect(() => {
++    const preview = previewCanvas.current
++    const source = sheetCanvas.current
++    if (!preview || !source || !count || !layout.cellWidth) return
++    const zoom = Math.min(1, 280 / layout.cellHeight)
++    preview.width = Math.round(layout.cellWidth * zoom)
++    preview.height = Math.round(layout.cellHeight * zoom)
++    const ctx = preview.getContext('2d')
++    if (!ctx) return
++    ctx.imageSmoothingEnabled = !pixelArt
++    let frame = 0
++    const draw = () => {
++      const sx = (frame % columns) * layout.cellWidth
++      const sy = Math.floor(frame / columns) * layout.cellHeight
++      ctx.clearRect(0, 0, preview.width, preview.height)
++      ctx.drawImage(source, sx, sy, layout.cellWidth, layout.cellHeight, 0, 0, preview.width, preview.height)
++      frame = (frame + 1) % count
++    }
++    draw()
++    const timer = setInterval(draw, 1000 / Math.max(1, fps))
++    return () => clearInterval(timer)
++  }, [paintVersion, count, columns, layout.cellWidth, layout.cellHeight, fps, pixelArt])
++
++  const load = async (fileList: FileList | File[]) => {
++    const files = [...fileList].filter((f) => f.type.startsWith('image/')).sort((a, b) => naturalCompare(a.name, b.name))
++    if (!files.length) {
++      setError('Drop PNG or JPEG images.')
++      return
++    }
++    setLoading(true)
++    setError(null)
++    try {
++      if (files.length === 1) {
++        const raw = await fileToRaw(files[0])
++        const next = { name: files[0].name, raw, ...guessGrid(raw) }
++        setSheet(next)
++        setFrames(framesFromSheet(next))
++      } else {
++        const loaded = await Promise.all(files.slice(0, MAX_FRAMES).map(async (f) => newFrame(f.name, await fileToRaw(f))))
++        setSheet(null)
++        setFrames(loaded)
++        if (files.length > MAX_FRAMES) setError(`Only the first ${MAX_FRAMES} images were used.`)
++      }
++    } catch {
++      setError('Could not read one of the images.')
++    } finally {
++      setLoading(false)
++    }
++  }
++
++  const onFiles = (e: ChangeEvent<HTMLInputElement>) => {
++    if (e.target.files) void load(e.target.files)
++    e.target.value = ''
++  }
++
++  const onDrop = (e: DragEvent<HTMLElement>) => {
++    e.preventDefault()
++    setDragging(false)
++    void load(e.dataTransfer.files)
++  }
++
++  const reslice = (patch: Partial<Pick<SheetSource, 'columns' | 'rows'>>) => {
++    if (!sheet) return
++    const next = { ...sheet, ...patch }
++    if (!(next.columns >= 1 && next.rows >= 1 && next.columns * next.rows <= MAX_FRAMES)) return
++    setSheet(next)
++    setFrames(framesFromSheet(next))
++  }
++
++  const update = (id: string, patch: Partial<GlueFrame>) =>
++    setFrames((list) => list.map((f) => (f.id === id ? { ...f, ...patch } : f)))
++
++  const move = (index: number, by: number) =>
++    setFrames((list) => {
++      const target = index + by
++      if (target < 0 || target >= list.length) return list
++      const next = [...list]
++      ;[next[index], next[target]] = [next[target], next[index]]
++      return next
++    })
++
++  const usableIndex = new Map(usable.map((u, i) => [u.frame.id, i]))
++
++  return (
++    <section aria-label="Glue frames" className="flex flex-col gap-3">
++      <div className="flex flex-col gap-1">
++        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Glue frames into a sheet</h2>
++        <p className="text-xs text-slate-500 dark:text-slate-400">
++          Drop the frames you generated (one image per frame, named in order) or one sprite sheet. The background is
++          removed, the feet go on one ground line, the heads line up, and everything is packed into a transparent sheet.
++          Nothing leaves your browser.
++        </p>
++      </div>
++
++      <label
++        onDragOver={(e) => {
++          e.preventDefault()
++          setDragging(true)
++        }}
++        onDragLeave={() => setDragging(false)}
++        onDrop={onDrop}
++        className={
++          'flex cursor-pointer flex-col items-center gap-1 rounded-lg border-2 border-dashed px-3 py-5 text-center text-sm ' +
++          (dragging
++            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40'
++            : 'border-slate-300 hover:border-slate-400 dark:border-slate-600')
++        }
++      >
++        <span className="font-medium text-slate-800 dark:text-slate-200">
++          {loading ? 'Reading images…' : 'Drop images here, or click to choose'}
++        </span>
++        <span className="text-xs text-slate-500 dark:text-slate-400">Several images: one per frame. One image: a sheet to cut.</span>
++        <input type="file" accept="image/*" multiple className="sr-only" onChange={onFiles} aria-label="Frame images" />
++      </label>
++
++      {error && (
++        <p role="alert" className="text-sm text-red-700 dark:text-red-400">
++          {error}
++        </p>
++      )}
++
++      {sheet && (
++        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 dark:text-slate-400">
++          <span>Cut “{sheet.name}” into</span>
++          <label className="flex items-center gap-1">
++            <input
++              type="number"
++              min={1}
++              max={12}
++              className={smallInput}
++              value={sheet.columns}
++              onChange={(e) => reslice({ columns: Number(e.target.value) })}
++              aria-label="Sheet columns"
++            />
++            columns
++          </label>
++          <label className="flex items-center gap-1">
++            <input
++              type="number"
++              min={1}
++              max={6}
++              className={smallInput}
++              value={sheet.rows}
++              onChange={(e) => reslice({ rows: Number(e.target.value) })}
++              aria-label="Sheet rows"
++            />
++            rows
++          </label>
++        </div>
++      )}
++
++      {frames.length > 0 && (
++        <>
++          <fieldset className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-slate-200 p-3 text-xs text-slate-700 dark:border-slate-700 dark:text-slate-300">
++            <legend className="px-1 text-sm font-medium">Alignment</legend>
++            <label className="flex flex-col gap-1">
++              Line up by
++              <select className={inputClass} value={anchor} onChange={(e) => setAnchor(e.target.value as AnchorX)} aria-label="Line up by">
++                <option value="head">Head (walk, run, jump)</option>
++                <option value="center">Body center (lying, rolling)</option>
++              </select>
++            </label>
++            <label className="flex flex-col gap-1">
++              Sheet layout
++              <select
++                className={inputClass}
++                value={sheetLayout}
++                onChange={(e) => setSheetLayout(e.target.value as SheetLayout)}
++                aria-label="Output layout"
++              >
++                <option value="grid">Grid ({count ? `${gridFor(count).columns}×${gridFor(count).rows}` : 'auto'})</option>
++                <option value="row">One row</option>
++              </select>
++            </label>
++            <label className="col-span-2 flex items-center gap-2">
++              <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} />
++              Put the feet on one ground line, except frames in the air
++            </label>
++            <label className="flex flex-col gap-1">
++              Background removal: {tolerance}
++              <input
++                type="range"
++                min={40}
++                max={160}
++                value={tolerance}
++                onChange={(e) => setTolerance(Number(e.target.value))}
++                aria-label="Background removal strength"
++              />
++            </label>
++            <label className="flex flex-col gap-1">
++              Padding: {padding} px
++              <input
++                type="range"
++                min={0}
++                max={40}
++                value={padding}
++                onChange={(e) => setPadding(Number(e.target.value))}
++                aria-label="Padding"
++              />
++            </label>
++          </fieldset>
++
++          <ol className="flex flex-col divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-xs dark:divide-slate-700 dark:border-slate-700 dark:bg-slate-900">
++            {frames.map((f, i) => {
++              const slot = usableIndex.get(f.id)
++              const placement = slot !== undefined ? layout.placements[slot] : undefined
++              return (
++                <li key={f.id} data-testid="glue-frame" className="flex gap-3 px-3 py-2">
++                  <FrameThumb
++                    source={sheetCanvas.current}
++                    version={paintVersion}
++                    cell={
++                      slot === undefined
++                        ? null
++                        : {
++                            x: (slot % Math.max(1, columns)) * layout.cellWidth,
++                            y: Math.floor(slot / Math.max(1, columns)) * layout.cellHeight,
++                            w: layout.cellWidth,
++                            h: layout.cellHeight,
++                          }
++                    }
++                  />
++                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
++                    <div className="flex items-center gap-2">
++                      <span className="font-medium text-slate-800 dark:text-slate-200">Frame {i + 1}</span>
++                      <span className="min-w-0 flex-1 truncate text-slate-500 dark:text-slate-400" title={f.name}>
++                        {f.name}
++                      </span>
++                      <button type="button" className={smallButton} onClick={() => move(i, -1)} disabled={i === 0} aria-label={`Move frame ${i + 1} up`}>
++                        ↑
++                      </button>
++                      <button
++                        type="button"
++                        className={smallButton}
++                        onClick={() => move(i, 1)}
++                        disabled={i === frames.length - 1}
++                        aria-label={`Move frame ${i + 1} down`}
++                      >
++                        ↓
++                      </button>
++                      <button
++                        type="button"
++                        className={smallButton}
++                        onClick={() => setFrames((list) => list.filter((x) => x.id !== f.id))}
++                        aria-label={`Remove frame ${i + 1}`}
++                      >
++                        ✕
++                      </button>
++                    </div>
++                    {slot === undefined ? (
++                      <span className="text-red-600 dark:text-red-400">Nothing found on the background. Try a lower background removal.</span>
++                    ) : (
++                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-600 dark:text-slate-400">
++                        <label className="flex items-center gap-1" title="Scale this frame, if it came out bigger or smaller">
++                          Size %
++                          <input
++                            type="number"
++                            min={25}
++                            max={400}
++                            className={smallInput}
++                            value={f.scale}
++                            onChange={(e) => {
++                              const scale = Number(e.target.value)
++                              if (scale >= 25 && scale <= 400) update(f.id, { scale })
++                            }}
++                            aria-label={`Frame ${i + 1} scale`}
++                          />
++                        </label>
++                        <label className="flex items-center gap-1" title="Move right (+) or left (-), in pixels">
++                          x
++                          <input
++                            type="number"
++                            className={smallInput}
++                            value={f.dx}
++                            onChange={(e) => update(f.id, { dx: Number(e.target.value) || 0 })}
++                            aria-label={`Frame ${i + 1} x offset`}
++                          />
++                        </label>
++                        <label className="flex items-center gap-1" title="Move down (+) or up (-), in pixels">
++                          y
++                          <input
++                            type="number"
++                            className={smallInput}
++                            value={f.dy}
++                            onChange={(e) => update(f.id, { dy: Number(e.target.value) || 0 })}
++                            aria-label={`Frame ${i + 1} y offset`}
++                          />
++                        </label>
++                        {snap && (
++                          <select
++                            className={`${compactInput} px-1.5 py-0.5 text-xs`}
++                            value={f.airborne === undefined ? 'auto' : f.airborne ? 'air' : 'ground'}
++                            onChange={(e) =>
++                              update(f.id, { airborne: e.target.value === 'auto' ? undefined : e.target.value === 'air' })
++                            }
++                            aria-label={`Frame ${i + 1} ground or air`}
++                          >
++                            <option value="auto">Auto ({placement?.airborne ? 'in the air' : 'on the ground'})</option>
++                            <option value="ground">On the ground</option>
++                            <option value="air">In the air</option>
++                          </select>
++                        )}
++                      </div>
++                    )}
++                  </div>
++                </li>
++              )
++            })}
++          </ol>
++        </>
++      )}
++
++      <div className={count ? 'flex flex-col gap-3' : 'hidden'}>
++        <div className="flex flex-wrap items-end gap-4">
++          <div className="flex flex-col gap-1">
++            <span className="text-xs font-medium text-slate-700 dark:text-slate-300">Preview</span>
++            <canvas
++              ref={previewCanvas}
++              data-testid="glue-preview"
++              className="rounded-lg border border-slate-200 bg-[repeating-conic-gradient(#e2e8f0_0_25%,#fff_0_50%)] bg-[length:16px_16px] dark:border-slate-700"
++            />
++          </div>
++          <label className="flex flex-col gap-1 text-xs text-slate-700 dark:text-slate-300">
++            Speed: {fps} fps
++            <input type="range" min={2} max={24} value={fps} onChange={(e) => setFps(Number(e.target.value))} aria-label="Preview speed" />
++          </label>
++        </div>
++
++        <div className="flex flex-col gap-1">
++          <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
++            Sheet: {count} frames, {columns}×{rows}, cell {layout.cellWidth}×{layout.cellHeight} px
++            {outputScale !== 100 &&
++              ` (saved at ${Math.round((layout.cellWidth * outputScale) / 100)}×${Math.round((layout.cellHeight * outputScale) / 100)})`}
++          </span>
++          <canvas
++            ref={sheetCanvas}
++            data-testid="glue-sheet"
++            className="h-auto max-w-full rounded-lg border border-slate-200 bg-[repeating-conic-gradient(#e2e8f0_0_25%,#fff_0_50%)] bg-[length:16px_16px] dark:border-slate-700"
++          />
++        </div>
++
++        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700 dark:text-slate-300">
++          <label className="flex items-center gap-1">
++            Save at
++            <select className={`${compactInput} py-1`} value={outputScale} onChange={(e) => setOutputScale(Number(e.target.value))} aria-label="Output size">
++              {[100, 50, 25, 12.5].map((s) => (
++                <option key={s} value={s}>
++                  {s}%
++                </option>
++              ))}
++            </select>
++          </label>
++          <label className="flex items-center gap-1">
++            <input type="checkbox" checked={pixelArt} onChange={(e) => setPixelArt(e.target.checked)} />
++            Pixel art (sharp scaling)
++          </label>
++          <button
++            type="button"
++            className={primaryButtonClass}
++            onClick={() => sheetCanvas.current && downloadCanvasPng(sheetCanvas.current, 'sprite-sheet.png', outputScale / 100, !pixelArt)}
++          >
++            Download sheet PNG
++          </button>
++        </div>
++      </div>
++    </section>
++  )
++}
+diff --git a/src/config/animations.ts b/src/config/animations.ts
+index 2fc4b40..c80d071 100644
+--- a/src/config/animations.ts
++++ b/src/config/animations.ts
+@@ -1,4 +1,4 @@
+-import type { AnimationSpec, FrameLayout } from '../types'
++import type { AnimationOutput, AnimationSpec, FrameLayout } from '../types'
+ 
+ /**
+  * Animation presets for the Animations tab. Each one becomes a sprite strip
+@@ -8,6 +8,10 @@ import type { AnimationSpec, FrameLayout } from '../types'
+  * Limbs that swap during a cycle are named "near" (closer to the camera) and
+  * "far". Image models lose track of the character's left and right, so a
+  * left/right walk cycle comes out with the same leg leading in every frame.
++ *
++ * Wording matters: "the second half repeats the first" gets drawn as a copy,
++ * and a pose with no direction in it ("neutral standing pose") gets drawn
++ * facing the camera. Say what differs, and keep the facing in every pose.
+  */
+ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+   {
+@@ -18,7 +22,7 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+     loop: true,
+     motion: 'standing still and breathing calmly, relaxed stance',
+     keyPoses: [
+-      'neutral standing pose, weight even on both feet, arms relaxed',
++      'relaxed standing pose, weight even on both feet, arms relaxed',
+       'breathing in: chest rises slightly, shoulders lift a little',
+       'top of the breath: chest fully raised, head a touch higher',
+       'breathing out: chest and shoulders lower back toward the first frame',
+@@ -31,15 +35,15 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+     frames: 8,
+     loop: true,
+     motion:
+-      'walking at a steady pace, arms swinging opposite to the legs; the second half of the cycle repeats the first half with the near and far legs swapped',
++      'walking at a steady pace, arms swinging opposite to the legs; the second half of the cycle is not a copy of the first half: the opposite leg leads',
+     keyPoses: [
+       'contact: near heel touches the ground in front, far leg stretched behind; far arm forward, near arm back',
+       'down: weight drops onto the near leg, near knee bent, body at its lowest; arms passing the hips',
+-      'passing: far leg swings forward past the near leg, body rising; arms close to the body',
++      'passing: legs together under the hips, near foot flat on the ground, far knee bent with the far foot lifted beside the near ankle, body rising; arms close to the body',
+       'up: near leg pushes off behind, far leg reaching forward, body at its highest; near arm forward, far arm back',
+       'contact: far heel touches the ground in front, near leg stretched behind; near arm forward, far arm back',
+       'down: weight drops onto the far leg, far knee bent, body at its lowest; arms passing the hips',
+-      'passing: near leg swings forward past the far leg, body rising; arms close to the body',
++      'passing: legs together under the hips, far foot flat on the ground, near knee bent with the near foot lifted beside the far ankle, body rising; arms close to the body',
+       'up: far leg pushes off behind, near leg reaching forward, body at its highest; far arm forward, near arm back, leading back into frame 1',
+     ],
+   },
+@@ -50,7 +54,7 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+     frames: 8,
+     loop: true,
+     motion:
+-      'running fast, torso leaning forward, arms pumping hard opposite to the legs; the second half of the cycle repeats the first half with the near and far legs swapped',
++      'running fast, torso leaning forward, arms pumping hard opposite to the legs; the second half of the cycle is not a copy of the first half: the opposite leg leads',
+     keyPoses: [
+       'contact: near foot lands under the body, far leg trailing behind; far arm swung forward, near arm swung back',
+       'down: near knee bends to absorb the landing, body at its lowest; both arms passing the hips',
+@@ -77,11 +81,11 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+       'full dash: same pose, body at its farthest forward lean',
+       'full dash: same pose, clothes and hair streaming back',
+       'full dash: same pose, front foot starting to reach forward',
+-      'braking: front foot plants on the ground, body leans back',
++      'braking: front foot plants on the ground ahead, torso tilts backward, still facing forward',
+       'sliding to a stop: knees bent, weight on the back leg',
+       'recovery: body rises out of the slide',
+       'settling: weight returns to the center, arms come down',
+-      'back to the neutral standing pose',
++      'idle standing pose, facing the same way as the other frames',
+     ],
+   },
+   {
+@@ -125,7 +129,7 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+       'feet touch the ground, legs straight',
+       'impact: knees bend deeply, body squashed low, arms forward',
+       'pushing back up, knees straightening',
+-      'back to the neutral standing pose',
++      'idle standing pose, facing the same way as the other frames',
+     ],
+   },
+   {
+@@ -136,7 +140,7 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+     loop: false,
+     motion: 'going from standing into a low crouch',
+     keyPoses: [
+-      'neutral standing pose',
++      'idle standing pose, facing the same way as the other frames',
+       'halfway down: knees bending, torso lowering',
+       'full crouch: knees deeply bent, body low and compact',
+     ],
+@@ -208,9 +212,10 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
+ 
+ /** A fresh, editable copy of the presets. */
+ /** Bumped when the preset motions or poses change, so stored copies get the new text. */
+-export const ANIMATION_PRESETS_VERSION = 2
++export const ANIMATION_PRESETS_VERSION = 3
+ 
+ export const DEFAULT_FRAME_LAYOUT: FrameLayout = 'grid'
++export const DEFAULT_ANIMATION_OUTPUT: AnimationOutput = 'sheet'
+ 
+ export function defaultAnimations(): AnimationSpec[] {
+   return structuredClone(ANIMATION_PRESETS) as AnimationSpec[]
+diff --git a/src/config/fieldHelp.ts b/src/config/fieldHelp.ts
+index daee333..f52411c 100644
+--- a/src/config/fieldHelp.ts
++++ b/src/config/fieldHelp.ts
+@@ -148,7 +148,7 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
+   'asset.heldItems': {
+     text: 'What the character holds, and in which hand. Left and right are from the character’s point of view.',
+     examples: ['revolver in the right hand', 'shield on the left arm, sword in the right hand', 'empty hands'],
+-    tip: 'Always say left or right. Otherwise the item switches hands between assets.',
++    tip: 'Always say left or right. Otherwise the item switches hands between assets. If the outfit has a holster or scabbard for it, call that one empty, or the model draws two.',
+   },
+   'asset.view': {
+     text: 'The camera angle. Use the same view for every asset that appears together in the game.',
+@@ -177,7 +177,12 @@ export const FIELD_HELP: Record<string, FieldHelp> = {
+   },
+   'asset.lighting': {
+     text: 'Where the light comes from and how strong it is. Keeping it the same makes assets fit together.',
+-    examples: ['even and neutral, from upper left', 'warm sunset light from the right', 'cold moonlight from above, soft shadows'],
++    examples: [
++      'even and neutral, from upper left (sprites and icons)',
++      'warm sunset light from the right (backgrounds)',
++      'cold moonlight from above, soft shadows (backgrounds)',
++    ],
++    tip: 'Keep sprites even and neutral. Mood lighting gets baked in and looks wrong in other scenes, so save it for backgrounds.',
+   },
+   'asset.exclusions': {
+     text: 'Things the model must leave out. Each one becomes part of the "Exclude" line.',
+diff --git a/src/lib/__snapshots__/buildPrompt.test.ts.snap b/src/lib/__snapshots__/buildPrompt.test.ts.snap
+index 4baba99..d9e3577 100644
+--- a/src/lib/__snapshots__/buildPrompt.test.ts.snap
++++ b/src/lib/__snapshots__/buildPrompt.test.ts.snap
+@@ -14,6 +14,7 @@ Torso: sky blue bodysuit with a brass belt buckle
+ Arms and hands: dark blue fingerless gloves
+ Legs and feet: oversized royal blue boots with brass spurs
+ Signature details: red scarf trailing behind; brass star on the belt buckle; fin on the helmet
++Sides: left and right always mean the character's own left and right, not the viewer's
+ 
+ [ASSET]
+ Type: Sprite
+diff --git a/src/lib/buildAnimations.test.ts b/src/lib/buildAnimations.test.ts
+index d646ea7..ea306ad 100644
+--- a/src/lib/buildAnimations.test.ts
++++ b/src/lib/buildAnimations.test.ts
+@@ -3,7 +3,7 @@ import { ANIMATION_PRESETS, defaultAnimations } from '../config/animations'
+ import { gridFor, isValidFrameCount } from '../config/assetPresets'
+ import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
+ import type { AnimationSpec } from '../types'
+-import { buildAnimationPrompt, buildAnimationSet, validateAnimations } from './buildAnimations'
++import { buildAnimationPrompt, buildAnimationSet, propsLine, validateAnimations, viewLockLine } from './buildAnimations'
+ import { buildPrompt } from './buildPrompt'
+ 
+ const sharedPart = (prompt: string) => prompt.slice(0, prompt.indexOf('[ASSET]'))
+@@ -139,7 +139,8 @@ describe('walk and run cycles', () => {
+     const left = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ view: 'side-left' }), preset('run'))
+     expect(left).toContain("near is the character's left side")
+     const front = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ view: 'front' }), preset('run'))
+-    expect(front).toMatch(/Limbs: .+farther away\n/)
++    expect(front).toMatch(/Limbs: .+farther away; the far arm and far leg are drawn noticeably darker/)
++    expect(front).not.toContain('near is the character')
+     expect(buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('idle'))).not.toContain('Limbs:')
+   })
+ 
+@@ -189,3 +190,66 @@ describe('validateAnimations', () => {
+     expect(validateAnimations([custom, { ...custom, id: 'y', enabled: false, frames: undefined }])).toHaveLength(1)
+   })
+ })
++
++describe('locks that keep frames consistent', () => {
++  const block = (prompt: string) => prompt.slice(prompt.indexOf('[ANIMATION]'))
++
++  it('locks the side view in every frame so the character never turns to the camera', () => {
++    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('dash'))
++    expect(block(prompt)).toContain(
++      'View lock: side view, facing right, in every frame, including the first and the last; the character never turns toward the camera\n',
++    )
++  })
++
++  it('locks other views without the side-view wording', () => {
++    expect(viewLockLine('front')).toBe('View lock: front view, in every frame, including the first and the last')
++    expect(viewLockLine('side-left')).toContain('side view, facing left')
++  })
++
++  it('locks the held items to the same hands in every frame', () => {
++    const asset = cleanAsset({ heldItems: 'a pistol in the right hand and a knife in the left hand.' })
++    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), asset, preset('run'))
++    expect(block(prompt)).toContain(
++      'Props: a pistol in the right hand and a knife in the left hand, in every frame; nothing appears, disappears or changes hands\n',
++    )
++  })
++
++  it('has no Props line when nothing is held', () => {
++    expect(propsLine('  ')).toBeNull()
++    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ heldItems: '' }), preset('run'))
++    expect(prompt).not.toContain('Props:')
++  })
++
++  it('shades the far limbs darker whenever near and far are used', () => {
++    const prompt = buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('walk'))
++    expect(prompt).toContain("near is the character's right side; the far arm and far leg are drawn noticeably darker, in shadow")
++  })
++
++  it('puts the locks after the layout and before the frames', () => {
++    const lines = block(buildAnimationPrompt(cleanStyle(), cleanCharacter(), cleanAsset(), preset('run'))).split('\n')
++    const at = (prefix: string) => lines.findIndex((l) => l.startsWith(prefix))
++    expect(at('Layout:')).toBeLessThan(at('View lock:'))
++    expect(at('View lock:')).toBeLessThan(at('Limbs:'))
++    expect(at('Limbs:')).toBeLessThan(at('Props:'))
++    expect(at('Props:')).toBeLessThan(at('Frame 1:'))
++  })
++})
++
++describe('preset wording', () => {
++  it('never tells the model the second half "repeats" the first, which it draws as a copy', () => {
++    for (const a of ANIMATION_PRESETS) expect(a.motion, a.id).not.toMatch(/\brepeats?\b/)
++    for (const id of ['walk', 'run']) expect(preset(id).motion).toContain('not a copy of the first half: the opposite leg leads')
++  })
++
++  it('never uses a standing pose with no facing, which comes out facing the camera', () => {
++    for (const a of ANIMATION_PRESETS) {
++      for (const pose of a.keyPoses) expect(pose, a.id).not.toMatch(/neutral standing pose/)
++    }
++    expect(preset('dash').keyPoses.at(-1)).toContain('facing the same way as the other frames')
++  })
++
++  it('describes the walk passing pose by its silhouette, legs together', () => {
++    expect(preset('walk').keyPoses[2]).toMatch(/^passing: legs together under the hips/)
++    expect(preset('walk').keyPoses[6]).toMatch(/^passing: legs together under the hips/)
++  })
++})
+diff --git a/src/lib/buildAnimations.ts b/src/lib/buildAnimations.ts
+index d1dccc8..9158ed7 100644
+--- a/src/lib/buildAnimations.ts
++++ b/src/lib/buildAnimations.ts
+@@ -6,6 +6,7 @@ import {
+   isValidFrameCount,
+   stripFraming,
+ } from '../config/assetPresets'
++import { VIEW_LABELS } from '../config/labels'
+ import type { AnimationSpec, AssetRequest, CharacterData, FrameLayout, StyleData, View } from '../types'
+ import { buildPrompt } from './buildPrompt'
+ 
+@@ -20,6 +21,9 @@ const CONSISTENCY_LINE =
+   'identical character design, size, colors and lighting in every frame; only the pose changes'
+ 
+ const NEAR_FAR_RE = /\b(near|far)\b/i
++/** Identical boots and sleeves give the model nothing to tell the legs apart by, so it copies one stride. */
++const FAR_SHADING = 'the far arm and far leg are drawn noticeably darker, in shadow, so near and far limbs are easy to tell apart'
++const PROPS_SUFFIX = 'in every frame; nothing appears, disappears or changes hands'
+ 
+ /** Which side of the character faces the camera, for views where that is fixed. */
+ const NEAR_SIDE: Partial<Record<View, string>> = {
+@@ -27,6 +31,22 @@ const NEAR_SIDE: Partial<Record<View, string>> = {
+   'side-left': "the character's left side",
+ }
+ 
++/**
++ * Without it, poses with no direction in them ("standing", "leans back") come out in
++ * the model's default front view, so the character spins toward the camera mid-animation.
++ */
++export function viewLockLine(view: View, scope: 'sheet' | 'frame' = 'sheet'): string {
++  const turn = isSideView(view) ? '; the character never turns toward the camera' : ''
++  const where = scope === 'sheet' ? ', in every frame, including the first and the last' : ', exactly as in the other frames'
++  return `View lock: ${VIEW_LABELS[view].toLowerCase()}${where}${turn}`
++}
++
++/** Keeps weapons and tools from popping in and out or switching hands between frames. */
++export function propsLine(heldItems: string | undefined): string | null {
++  const items = heldItems?.trim().replace(/[.;,]+$/, '')
++  return items ? `Props: ${items}, ${PROPS_SUFFIX}` : null
++}
++
+ /** The key poses, trimmed, or [] when their count doesn't match the frame count. */
+ export function usableKeyPoses(spec: AnimationSpec): string[] {
+   const poses = spec.keyPoses.map((p) => p.trim()).filter(Boolean)
+@@ -50,17 +70,28 @@ export function animationAsset(asset: AssetRequest, spec: AnimationSpec, layout:
+   }
+ }
+ 
+-function limbsLine(spec: AnimationSpec, view: View): string | null {
++export function limbsLine(spec: AnimationSpec, view: View): string | null {
+   const text = [spec.motion, ...spec.keyPoses].join(' ')
+   if (!NEAR_FAR_RE.test(text)) return null
+   const side = NEAR_SIDE[view]
+   return (
+     'Limbs: "near" means the arm or leg closer to the camera, "far" the one farther away' +
+-    (side ? `; near is ${side}` : '')
++    (side ? `; near is ${side}` : '') +
++    `; ${FAR_SHADING}`
+   )
+ }
+ 
+-export function buildAnimationBlock(spec: AnimationSpec, layout: FrameLayout = 'row', view: View = 'side-right'): string {
++export interface AnimationBlockOptions {
++  /** The held items from the form. Repeated as a per-frame lock when set. */
++  heldItems?: string
++}
++
++export function buildAnimationBlock(
++  spec: AnimationSpec,
++  layout: FrameLayout = 'row',
++  view: View = 'side-right',
++  options: AnimationBlockOptions = {},
++): string {
+   const poses = usableKeyPoses(spec)
+   const grid = layout === 'grid' && poses.length ? gridFor(poses.length) : null
+   const frameLabel = (i: number) => {
+@@ -73,7 +104,9 @@ export function buildAnimationBlock(spec: AnimationSpec, layout: FrameLayout = '
+     spec.name.trim() && `Animation: ${spec.name.trim()}`,
+     `Loop: ${spec.loop ? LOOP_LINE : NO_LOOP_LINE}`,
+     `Layout: ${layout === 'grid' ? GRID_LAYOUT_LINE : ROW_LAYOUT_LINE}`,
++    viewLockLine(view),
+     limbsLine(spec, view),
++    propsLine(options.heldItems),
+     ...poses.map((pose, i) => `${frameLabel(i)}: ${pose}`),
+     `Clean frames: ${CLEAN_LINE}`,
+     `Consistency: ${CONSISTENCY_LINE}`,
+@@ -94,7 +127,7 @@ export function buildAnimationPrompt(
+ ): string {
+   return [
+     buildPrompt(style, character, animationAsset(asset, spec, layout)),
+-    buildAnimationBlock(spec, layout, asset.view),
++    buildAnimationBlock(spec, layout, asset.view, { heldItems: asset.heldItems }),
+   ].join('\n\n')
+ }
+ 
+diff --git a/src/lib/buildFrames.test.ts b/src/lib/buildFrames.test.ts
+new file mode 100644
+index 0000000..4597324
+--- /dev/null
++++ b/src/lib/buildFrames.test.ts
+@@ -0,0 +1,122 @@
++import { describe, expect, it } from 'vitest'
++import { defaultAnimations } from '../config/animations'
++import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
++import type { AnimationSpec } from '../types'
++import { buildPrompt } from './buildPrompt'
++import {
++  buildFramePrompts,
++  buildFrameSet,
++  FRAME_FRAMING,
++  mirrorSources,
++  swapNearFar,
++  validateFrameMode,
++} from './buildFrames'
++import { parsePrompt } from './parsePrompt'
++import { defaultFormValues } from '../config/defaults'
++
++const preset = (id: string) => defaultAnimations().find((a) => a.id === id)!
++const frames = (id: string, character = cleanCharacter()) =>
++  buildFramePrompts(cleanStyle(), character, cleanAsset({ heldItems: 'a pistol in the right hand' }), preset(id))
++
++describe('swapNearFar', () => {
++  it('swaps every near and far, keeping capitals', () => {
++    expect(swapNearFar('Near heel down, far leg behind; near arm back')).toBe('Far heel down, near leg behind; far arm back')
++  })
++})
++
++describe('mirrorSources', () => {
++  it('maps the second half of the walk and run cycles onto the first half', () => {
++    for (const id of ['walk', 'run']) expect(mirrorSources(preset(id).keyPoses)).toEqual([null, null, null, null, 0, 1, 2, 3])
++  })
++
++  it('finds nothing in animations without near and far', () => {
++    expect(mirrorSources(preset('dash').keyPoses).every((s) => s === null)).toBe(true)
++    expect(mirrorSources(preset('idle').keyPoses).every((s) => s === null)).toBe(true)
++  })
++
++  it('needs an even number of frames', () => {
++    expect(mirrorSources(['near up', 'far up', 'near down'])).toEqual([null, null, null])
++  })
++})
++
++describe('buildFramePrompts', () => {
++  it('makes one single-sprite prompt per pose', () => {
++    const run = frames('run')
++    expect(run).toHaveLength(8)
++    for (const [i, f] of run.entries()) {
++      expect(f.prompt).toContain('Type: Sprite\n')
++      expect(f.prompt).not.toContain('Frames:')
++      expect(f.prompt).toContain('Aspect ratio: 1:1')
++      expect(f.prompt).toContain(`Action: ${preset('run').keyPoses[i]}\n`)
++      expect(f.prompt).toContain(`Animation: Run, frame ${i + 1} of 8, part of a looping cycle`)
++      expect(f.prompt).toContain('Single pose: exactly one character in one pose, not a sprite sheet')
++    }
++  })
++
++  it('uses the same fixed framing in every frame', () => {
++    for (const f of frames('dash')) expect(f.prompt).toContain(`Framing: ${FRAME_FRAMING}\n`)
++  })
++
++  it('tells the second half to copy the matching first-half frame with the other leg leading', () => {
++    const run = frames('run')
++    expect(run.map((f) => f.basedOn)).toEqual([null, null, null, null, 0, 1, 2, 3])
++    expect(run[4].prompt).toContain('Based on: frame 1. Attach your approved frame 1 as a second reference image')
++    expect(run[0].prompt).not.toContain('Based on:')
++  })
++
++  it('keeps the view, limbs and props locks', () => {
++    const [first] = frames('walk')
++    expect(first.prompt).toContain('View lock: side view, facing right, exactly as in the other frames; the character never turns toward the camera')
++    expect(first.prompt).toContain('Limbs: "near" means')
++    expect(first.prompt).toContain('Props: a pistol in the right hand, in every frame')
++  })
++
++  it('drops the sheet-only clause about cycle halves from the motion', () => {
++    const [first] = frames('run')
++    expect(first.prompt).toContain('Motion: running fast, torso leaning forward, arms pumping hard opposite to the legs\n')
++    expect(first.prompt).not.toMatch(/second half/)
++  })
++
++  it('points at the reference image when the character has one', () => {
++    const [first] = frames('idle', { ...cleanCharacter(), hasReferenceImage: true })
++    expect(first.prompt.startsWith('Use the attached reference image')).toBe(true)
++    expect(first.prompt).toContain('same scale and position as the reference image')
++    expect(first.prompt).toContain('Consistency: identical character design, size, colors and lighting to the reference image')
++  })
++
++  it('keeps the Style and Character blocks identical to the single prompt', () => {
++    const shared = (p: string) => p.slice(0, p.indexOf('[ASSET]'))
++    const single = shared(buildPrompt(cleanStyle(), cleanCharacter(), cleanAsset()))
++    for (const f of frames('jump')) expect(shared(f.prompt)).toBe(single)
++  })
++
++  it('can be read back by Fill from prompt, skipping the [FRAME] block', () => {
++    const [first] = frames('run')
++    const { values, notes } = parsePrompt(first.prompt, defaultFormValues())
++    expect(values.asset.action).toBe(preset('run').keyPoses[0])
++    expect(notes).toEqual([expect.stringContaining('[FRAME]')])
++  })
++
++  it('is empty when the poses do not match the frame count', () => {
++    expect(buildFramePrompts(cleanStyle(), cleanCharacter(), cleanAsset(), { ...preset('run'), frames: 6 })).toEqual([])
++  })
++})
++
++describe('buildFrameSet and validateFrameMode', () => {
++  const custom: AnimationSpec = { id: 'x', name: 'Wall slide', enabled: true, frames: 4, loop: true, motion: '', keyPoses: [] }
++
++  it('builds every enabled animation that has its poses', () => {
++    const specs = [...defaultAnimations(), custom]
++    const set = buildFrameSet(cleanStyle(), cleanCharacter(), cleanAsset(), specs)
++    expect(set.map((a) => a.spec.id)).toEqual(specs.filter((a) => a.enabled && a.id !== 'x').map((a) => a.id))
++    expect(set.find((a) => a.spec.id === 'walk')?.frames).toHaveLength(8)
++  })
++
++  it('blocks animations that have no pose per frame', () => {
++    expect(validateFrameMode(defaultAnimations())).toEqual([])
++    expect(validateFrameMode([custom])).toEqual([
++      { field: 'animations.x', label: 'Wall slide', message: expect.stringContaining('write 4 frame poses') },
++    ])
++    expect(validateFrameMode([{ ...custom, enabled: false }])).toEqual([])
++  })
++})
+diff --git a/src/lib/buildFrames.ts b/src/lib/buildFrames.ts
+new file mode 100644
+index 0000000..eb54a6a
+--- /dev/null
++++ b/src/lib/buildFrames.ts
+@@ -0,0 +1,151 @@
++import { isValidFrameCount } from '../config/assetPresets'
++import type { AnimationSpec, AssetRequest, CharacterData, StyleData } from '../types'
++import { type AnimationIssue, limbsLine, propsLine, usableKeyPoses, viewLockLine } from './buildAnimations'
++import { buildPrompt } from './buildPrompt'
++
++/**
++ * "One prompt per frame" mode. Image models are good at one pose and bad at keeping
++ * motion straight across a grid (the second row comes out as a copy of the first), so
++ * each key pose becomes its own single-sprite prompt. The frames are glued back
++ * together afterwards in the Glue tab.
++ */
++
++/** Fixed placement, so separate generations line up with little correction. */
++export const FRAME_FRAMING =
++  'full body, centered horizontally, nothing cropped; the character fills about 80% of the image height when standing; ground line 10% above the bottom edge, airborne poses float above it'
++const FRAME_FRAMING_REFERENCE = '; same scale and position as the reference image'
++
++const SINGLE_POSE_LINE =
++  'exactly one character in one pose, not a sprite sheet: no other frames, no motion blur, smears, speed lines or afterimages'
++const CONSISTENCY_REFERENCE = 'identical character design, size, colors and lighting to the reference image; only the pose changes'
++const CONSISTENCY_TEXT = 'the same character design, size, colors and lighting as every other frame; only the pose changes'
++
++const NEAR_FAR_RE = /\b(?:near|far)\b/i
++const LEADS_BACK_RE = /,\s*leading back into frame 1\s*$/i
++
++export function swapNearFar(text: string): string {
++  return text.replace(/\b(near|far)\b/gi, (word) => {
++    const swapped = word.toLowerCase() === 'near' ? 'far' : 'near'
++    return word[0] === word[0].toUpperCase() ? swapped[0].toUpperCase() + swapped.slice(1) : swapped
++  })
++}
++
++/**
++ * For each frame, the 0-based index of the earlier frame it mirrors (same pose with near
++ * and far swapped), or null. Only the second half of an even cycle can mirror the first.
++ * Drawing "frame 1 with the opposite leg leading", with frame 1 attached, is the most
++ * reliable way to get the legs to alternate.
++ */
++export function mirrorSources(poses: readonly string[]): (number | null)[] {
++  const n = poses.length
++  const half = n / 2
++  const clean = (p: string) => p.trim().replace(LEADS_BACK_RE, '')
++  return poses.map((pose, i) => {
++    if (n % 2 !== 0 || i < half) return null
++    const source = poses[i - half]
++    if (!NEAR_FAR_RE.test(source)) return null
++    return clean(pose) === swapNearFar(clean(source)) ? i - half : null
++  })
++}
++
++/** The motion without clauses about cycle halves, which only make sense for a whole sheet. */
++function frameMotion(motion: string): string {
++  return motion
++    .split(';')
++    .map((part) => part.trim())
++    .filter((part) => part && !/\bhalf\b/i.test(part))
++    .join('; ')
++}
++
++export function frameAsset(asset: AssetRequest, pose: string, hasReference: boolean): AssetRequest {
++  return {
++    ...asset,
++    type: 'sprite',
++    includeCharacter: true,
++    action: pose,
++    frameCount: undefined,
++    frameLayout: undefined,
++    framing: FRAME_FRAMING + (hasReference ? FRAME_FRAMING_REFERENCE : ''),
++    aspectRatio: '1:1',
++    customAspectRatio: '',
++  }
++}
++
++function basedOnLine(source: number): string {
++  const n = source + 1
++  return (
++    `Based on: frame ${n}. Attach your approved frame ${n} as a second reference image and draw that exact pose ` +
++    'with the opposite leg and arm leading: wherever the near leg and arm were, the far ones are now, and the other way around'
++  )
++}
++
++export interface FramePrompt {
++  /** 0-based frame index. */
++  index: number
++  pose: string
++  /** 0-based index of the frame to attach as a second reference, or null. */
++  basedOn: number | null
++  prompt: string
++}
++
++/** One single-sprite prompt per key pose. Empty when the poses don't match the frame count. */
++export function buildFramePrompts(
++  style: StyleData,
++  character: CharacterData | null,
++  asset: AssetRequest,
++  spec: AnimationSpec,
++): FramePrompt[] {
++  const poses = usableKeyPoses(spec)
++  const sources = mirrorSources(poses)
++  const hasReference = Boolean(character?.hasReferenceImage)
++  const name = spec.name.trim() || 'Animation'
++  const motion = frameMotion(spec.motion)
++  const kind = spec.loop ? 'part of a looping cycle' : 'plays once'
++
++  return poses.map((pose, index) => {
++    const basedOn = sources[index]
++    const block = [
++      '[FRAME]',
++      `Animation: ${name}, frame ${index + 1} of ${poses.length}, ${kind}`,
++      motion && `Motion: ${motion}`,
++      basedOn !== null && basedOnLine(basedOn),
++      viewLockLine(asset.view, 'frame'),
++      limbsLine(spec, asset.view),
++      propsLine(asset.heldItems),
++      `Single pose: ${SINGLE_POSE_LINE}`,
++      `Consistency: ${hasReference ? CONSISTENCY_REFERENCE : CONSISTENCY_TEXT}`,
++    ]
++      .filter(Boolean)
++      .join('\n')
++    const prompt = [buildPrompt(style, character, frameAsset(asset, pose, hasReference)), block].join('\n\n')
++    return { index, pose, basedOn, prompt }
++  })
++}
++
++export interface AnimationFrames {
++  spec: AnimationSpec
++  frames: FramePrompt[]
++}
++
++/** Frame prompts for every enabled animation that has a valid frame count and one pose per frame. */
++export function buildFrameSet(
++  style: StyleData,
++  character: CharacterData | null,
++  asset: AssetRequest,
++  specs: AnimationSpec[],
++): AnimationFrames[] {
++  return specs
++    .filter((spec) => spec.enabled && isValidFrameCount(spec.frames) && usableKeyPoses(spec).length)
++    .map((spec) => ({ spec, frames: buildFramePrompts(style, character, asset, spec) }))
++}
++
++/** Per-frame mode needs a pose for every frame. These block copying. */
++export function validateFrameMode(specs: AnimationSpec[]): AnimationIssue[] {
++  return specs
++    .filter((spec) => spec.enabled && isValidFrameCount(spec.frames) && !usableKeyPoses(spec).length)
++    .map((spec) => ({
++      field: `animations.${spec.id}`,
++      label: spec.name.trim() || 'Untitled animation',
++      message: `One prompt per frame needs one pose per frame: write ${spec.frames} frame poses, one per line.`,
++    }))
++}
+diff --git a/src/lib/buildPrompt.test.ts b/src/lib/buildPrompt.test.ts
+index 703508b..a335c87 100644
+--- a/src/lib/buildPrompt.test.ts
++++ b/src/lib/buildPrompt.test.ts
+@@ -1,7 +1,7 @@
+ import { describe, expect, it } from 'vitest'
+ import { applyAssetPreset } from '../config/assetPresets'
+ import { cleanAsset, cleanCharacter, cleanStyle } from '../test/fixtures'
+-import { buildPrompt, REFERENCE_IMAGE_LINE } from './buildPrompt'
++import { buildPrompt, REFERENCE_IMAGE_LINE, SIDES_LINE } from './buildPrompt'
+ 
+ describe('buildPrompt', () => {
+   it('builds the full prompt in a stable field order', () => {
+@@ -78,4 +78,30 @@ describe('buildPrompt', () => {
+     const style = { ...cleanStyle(), palette: [{ name: 'Red', hex: 'f00', usage: '' }] }
+     expect(buildPrompt(style, null, cleanAsset())).toContain('Palette: Red #FF0000\n')
+   })
++
++  describe('sides', () => {
++    it("pins left and right to the character's own sides when a field uses them", () => {
++      const prompt = buildPrompt(cleanStyle(), cleanCharacter(), cleanAsset())
++      expect(prompt).toContain(`Signature details: red scarf trailing behind; brass star on the belt buckle; fin on the helmet\nSides: ${SIDES_LINE}\n\n[ASSET]`)
++    })
++
++    it('also checks the character fields, not just held items', () => {
++      const character = { ...cleanCharacter(), head: 'thin scar over the left eye' }
++      expect(buildPrompt(cleanStyle(), character, cleanAsset({ heldItems: 'a lantern' }))).toContain(`Sides: ${SIDES_LINE}`)
++    })
++
++    it('leaves the line out when nothing mentions a side', () => {
++      expect(buildPrompt(cleanStyle(), cleanCharacter(), cleanAsset({ heldItems: 'a lantern' }))).not.toContain('Sides:')
++    })
++
++    it('ignores side words in the view and action, which are about direction, not the body', () => {
++      const asset = cleanAsset({ heldItems: '', view: 'side-left', action: 'turning right' })
++      expect(buildPrompt(cleanStyle(), cleanCharacter(), asset)).not.toContain('Sides:')
++    })
++
++    it('leaves the line out when the character is not in the asset', () => {
++      const asset = applyAssetPreset(cleanAsset({ subject: 'a brass revolver' }), 'item-icon')
++      expect(buildPrompt(cleanStyle(), cleanCharacter(), asset)).not.toContain('Sides:')
++    })
++  })
+ })
+diff --git a/src/lib/buildPrompt.ts b/src/lib/buildPrompt.ts
+index 325f475..7ba5ffc 100644
+--- a/src/lib/buildPrompt.ts
++++ b/src/lib/buildPrompt.ts
+@@ -6,6 +6,27 @@ import { normalizeHex } from './color'
+ export const REFERENCE_IMAGE_LINE =
+   'Use the attached reference image as the exact design of the character. Keep every detail identical.'
+ 
++/**
++ * Image models read "left" and "right" from the viewer's side for some details and the
++ * character's side for others, even within one image. Pinning the convention fixes that.
++ */
++export const SIDES_LINE = "left and right always mean the character's own left and right, not the viewer's"
++
++const SIDE_WORD_RE = /\b(?:left|right)\b/i
++
++/** True when the character description or held items place something on a left or right side. */
++export function mentionsSides(character: CharacterData, asset: AssetRequest): boolean {
++  const texts = [
++    character.head,
++    character.torso,
++    character.armsAndHands,
++    character.legsAndFeet,
++    ...character.signatureDetails,
++    asset.heldItems,
++  ]
++  return texts.some((t) => SIDE_WORD_RE.test(t ?? ''))
++}
++
+ type Line = [label: string, value: string | undefined]
+ 
+ const clean = (s: string | undefined) => (s ?? '').trim()
+@@ -42,7 +63,7 @@ export function buildStyleBlock(style: StyleData): string | null {
+   ])
+ }
+ 
+-export function buildCharacterBlock(character: CharacterData): string | null {
++export function buildCharacterBlock(character: CharacterData, options: { sides?: boolean } = {}): string | null {
+   return renderBlock('[CHARACTER]', [
+     ['Name', character.name],
+     ['Proportions', character.proportions],
+@@ -51,6 +72,7 @@ export function buildCharacterBlock(character: CharacterData): string | null {
+     ['Arms and hands', character.armsAndHands],
+     ['Legs and feet', character.legsAndFeet],
+     ['Signature details', nonEmpty(character.signatureDetails).join('; ')],
++    ['Sides', options.sides ? SIDES_LINE : undefined],
+   ])
+ }
+ 
+@@ -96,7 +118,7 @@ export function buildPrompt(style: StyleData, character: CharacterData | null, a
+   const parts = [
+     withCharacter && character.hasReferenceImage ? REFERENCE_IMAGE_LINE : null,
+     buildStyleBlock(style),
+-    withCharacter ? buildCharacterBlock(character) : null,
++    withCharacter ? buildCharacterBlock(character, { sides: mentionsSides(character, asset) }) : null,
+     buildAssetBlock(asset),
+   ]
+   return parts.filter((p): p is string => p !== null).join('\n\n')
+diff --git a/src/lib/color.test.ts b/src/lib/color.test.ts
+new file mode 100644
+index 0000000..660399d
+--- /dev/null
++++ b/src/lib/color.test.ts
+@@ -0,0 +1,33 @@
++import { describe, expect, it } from 'vitest'
++import { hexToHsl, nameHexMismatch } from './color'
++
++describe('hexToHsl', () => {
++  it('converts primaries and grays', () => {
++    expect(hexToHsl('#FF0000')).toEqual({ h: 0, s: 1, l: 0.5 })
++    expect(hexToHsl('#0000FF')?.h).toBe(240)
++    expect(hexToHsl('#808080')?.s).toBe(0)
++    expect(hexToHsl('nope')).toBeNull()
++  })
++})
++
++describe('nameHexMismatch', () => {
++  it.each([
++    ['Indigo', '#D2452D', 'red'],
++    ['Torii red', '#264478', 'blue'],
++    ['Sky blue', '#E1B53A', 'yellow'],
++  ])('%s %s is actually %s', (name, hex, actual) => {
++    expect(nameHexMismatch(name, hex)).toBe(actual)
++  })
++
++  it.each([
++    ['Ocean teal', '#1F6F78'],
++    ['Sakura pink', '#F4B6C2'],
++    ['Coat red', '#A3262A'],
++    ['Treasure gold', '#E1B53A'],
++    ['Royal blue', '#1E4FD8'],
++    ['Ship wood', '#7A4E2D'],
++    ['Hair gray', '#606060'],
++  ])('%s %s matches', (name, hex) => {
++    expect(nameHexMismatch(name, hex)).toBeNull()
++  })
++})
+diff --git a/src/lib/color.ts b/src/lib/color.ts
+index 5912678..94d568f 100644
+--- a/src/lib/color.ts
++++ b/src/lib/color.ts
+@@ -38,3 +38,72 @@ export function hexDistance(a: string, b: string): number | null {
+   const rb = parseHex(b)
+   return ra && rb ? rgbDistance(ra, rb) : null
+ }
++
++export interface Hsl {
++  /** Hue in degrees, 0 to 360. */
++  h: number
++  /** Saturation, 0 to 1. */
++  s: number
++  /** Lightness, 0 to 1. */
++  l: number
++}
++
++export function hexToHsl(value: string): Hsl | null {
++  const rgb = parseHex(value)
++  if (!rgb) return null
++  const [r, g, b] = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
++  const max = Math.max(r, g, b)
++  const min = Math.min(r, g, b)
++  const l = (max + min) / 2
++  const d = max - min
++  if (d === 0) return { h: 0, s: 0, l }
++  const s = d / (1 - Math.abs(2 * l - 1))
++  let h: number
++  if (max === r) h = ((g - b) / d) % 6
++  else if (max === g) h = (b - r) / d + 2
++  else h = (r - g) / d + 4
++  return { h: (h * 60 + 360) % 360, s, l }
++}
++
++type HueRange = [from: number, to: number]
++
++/** Color words people put in palette names, and the hues they mean. Neutral words (gray, cream, black) are left out. */
++const HUE_WORDS: [words: RegExp, ranges: HueRange[]][] = [
++  [/\b(?:red|crimson|scarlet|ruby|blood)\b/i, [[340, 360], [0, 20]]],
++  [/\b(?:orange|rust|copper|amber)\b/i, [[10, 50]]],
++  [/\b(?:yellow|gold|golden|mustard|lemon)\b/i, [[35, 70]]],
++  [/\b(?:green|lime|olive|emerald|jade|moss)\b/i, [[60, 170]]],
++  [/\b(?:teal|cyan|turquoise|aqua)\b/i, [[155, 205]]],
++  [/\b(?:blue|navy|azure|cobalt|sapphire|sky)\b/i, [[190, 255]]],
++  [/\bindigo\b/i, [[215, 285]]],
++  [/\b(?:purple|violet|lavender|plum|lilac)\b/i, [[250, 310]]],
++  [/\b(?:pink|magenta|rose|fuchsia|sakura)\b/i, [[290, 360], [0, 15]]],
++  [/\bbrown\b/i, [[0, 50]]],
++]
++
++const inRange = (h: number, [from, to]: HueRange) => h >= from && h <= to
++
++/** A plain name for a hue, for messages. */
++export function hueName({ h, l }: Hsl): string {
++  if (h < 15 || h >= 345) return 'red'
++  if (h < 40) return l < 0.35 ? 'brown' : 'orange'
++  if (h < 70) return 'yellow'
++  if (h < 160) return 'green'
++  if (h < 195) return 'teal'
++  if (h < 255) return 'blue'
++  if (h < 290) return 'purple'
++  return 'pink'
++}
++
++/**
++ * When a palette name says one color and its hex is another, returns the color the
++ * hex actually is. Null when they agree, the name has no color word, or the hex is
++ * too gray for its hue to mean anything.
++ */
++export function nameHexMismatch(name: string, hex: string): string | null {
++  const hsl = hexToHsl(hex)
++  if (!hsl || hsl.s < 0.15) return null
++  const ranges = HUE_WORDS.filter(([re]) => re.test(name)).flatMap(([, r]) => r)
++  if (!ranges.length || ranges.some((r) => inRange(hsl.h, r))) return null
++  return hueName(hsl)
++}
+diff --git a/src/lib/glue.test.ts b/src/lib/glue.test.ts
+new file mode 100644
+index 0000000..36ffed2
+--- /dev/null
++++ b/src/lib/glue.test.ts
+@@ -0,0 +1,184 @@
++import { describe, expect, it } from 'vitest'
++import type { Rgb } from './color'
++import {
++  type Box,
++  composeSheet,
++  contentBox,
++  createImage,
++  DEFAULT_LAYOUT_OPTIONS,
++  detectKeyColor,
++  measure,
++  naturalCompare,
++  planLayout,
++  type RawImage,
++  removeBackground,
++  resize,
++  sliceSheet,
++} from './glue'
++
++const GREEN: Rgb = { r: 18, g: 200, b: 30 }
++const RED: Rgb = { r: 200, g: 30, b: 30 }
++const DARK: Rgb = { r: 40, g: 30, b: 30 }
++
++function filled(width: number, height: number, color: Rgb): RawImage {
++  const img = createImage(width, height)
++  for (let i = 0; i < img.data.length; i += 4) img.data.set([color.r, color.g, color.b, 255], i)
++  return img
++}
++
++function rect(img: RawImage, box: Box, color: Rgb, alpha = 255) {
++  for (let y = box.top; y < box.bottom; y++) {
++    for (let x = box.left; x < box.right; x++) img.data.set([color.r, color.g, color.b, alpha], (y * img.width + x) * 4)
++  }
++}
++
++const pixel = (img: RawImage, x: number, y: number) => [...img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 4)]
++
++/** A 100×100 green frame with a "character": a head block on top of a body block, feet at `feet`. */
++function character(offsetX: number, feet: number): RawImage {
++  const img = filled(100, 100, GREEN)
++  rect(img, { left: 40 + offsetX, top: feet - 50, right: 56 + offsetX, bottom: feet - 38 }, RED) // head
++  rect(img, { left: 36 + offsetX, top: feet - 38, right: 64 + offsetX, bottom: feet }, DARK) // body and legs
++  return img
++}
++
++const cut = (img: RawImage) => removeBackground(img, detectKeyColor(img))
++
++describe('background removal', () => {
++  it('detects the key color from the edges', () => {
++    expect(detectKeyColor(character(0, 90))).toEqual(GREEN)
++  })
++
++  it('makes the key color transparent and keeps the character solid', () => {
++    const out = cut(character(0, 90))
++    expect(pixel(out, 5, 5)[3]).toBe(0)
++    expect(pixel(out, 48, 45)).toEqual([200, 30, 30, 255])
++  })
++
++  it('removes green spill from edge pixels only', () => {
++    const img = filled(10, 10, GREEN)
++    rect(img, { left: 3, top: 3, right: 7, bottom: 7 }, { r: 120, g: 200, b: 130 }) // greenish, but far enough from the key to stay
++    const out = cut(img)
++    expect(pixel(out, 3, 3)).toEqual([120, 130, 130, 255]) // edge: despilled
++    expect(pixel(out, 4, 4)).toEqual([120, 200, 130, 255]) // inside: untouched
++  })
++})
++
++describe('contentBox and measure', () => {
++  it('finds the content and ignores a stray pixel', () => {
++    const img = cut(character(0, 90))
++    rect(img, { left: 2, top: 2, right: 3, bottom: 3 }, RED)
++    expect(contentBox(img)).toEqual({ left: 36, top: 40, right: 64, bottom: 90 })
++  })
++
++  it('returns null for an empty frame', () => {
++    expect(contentBox(cut(filled(20, 20, GREEN)))).toBeNull()
++  })
++
++  it('finds the feet and the head', () => {
++    const img = cut(character(10, 80))
++    const m = measure(img, contentBox(img)!)
++    expect(m.feetY).toBe(80)
++    expect(m.headX).toBe(58) // head spans 50 to 66
++    expect(m.centerX).toBe(60)
++  })
++})
++
++describe('planLayout', () => {
++  const metrics = (img: RawImage) => measure(img, contentBox(img)!)
++
++  it('puts every grounded frame on one baseline and lines the heads up', () => {
++    const frames = [cut(character(0, 90)), cut(character(15, 84)), cut(character(-10, 92))].map(metrics)
++    const layout = planLayout(frames, { ...DEFAULT_LAYOUT_OPTIONS, airborneThreshold: 0.1 })
++    for (const [i, p] of layout.placements.entries()) {
++      const f = frames[i]
++      expect(p.y + (f.box.bottom - f.box.top)).toBe(layout.baseline) // feet on the baseline
++      expect(p.x + (f.headX - f.box.left)).toBe(layout.cellWidth / 2) // head on the center line
++      expect(p.airborne).toBe(false)
++    }
++  })
++
++  it('keeps the lift of an airborne frame', () => {
++    const frames = [cut(character(0, 90)), cut(character(0, 90)), cut(character(0, 60))].map(metrics)
++    const layout = planLayout(frames)
++    const [ground, , jump] = layout.placements
++    expect(jump.airborne).toBe(true)
++    expect(ground.y - jump.y).toBe(30)
++  })
++
++  it('finds the ground under the grounded frames even when half the frames are in the air', () => {
++    const frames = [90, 89, 70, 68, 90, 88, 66, 69].map((feet) => metrics(cut(character(0, feet))))
++    const layout = planLayout(frames)
++    expect(layout.placements.map((p) => p.airborne)).toEqual([false, false, true, true, false, false, true, true])
++  })
++
++  it('lets a frame be forced onto the ground or into the air', () => {
++    const frames = [cut(character(0, 90)), cut(character(0, 90)), cut(character(0, 60))].map(metrics)
++    const forced = planLayout(frames, DEFAULT_LAYOUT_OPTIONS, [{ dx: 0, dy: 0, airborne: true }, { dx: 0, dy: 0 }, { dx: 0, dy: 0, airborne: false }])
++    expect(forced.placements.map((p) => p.airborne)).toEqual([true, false, false])
++  })
++
++  it('treats every frame as grounded-in-place when snapping is off', () => {
++    const frames = [cut(character(0, 90)), cut(character(0, 60))].map(metrics)
++    const layout = planLayout(frames, { ...DEFAULT_LAYOUT_OPTIONS, snapToGround: false })
++    expect(layout.placements.map((p) => p.airborne)).toEqual([false, false])
++    expect(layout.placements[0].y - layout.placements[1].y).toBe(30)
++  })
++
++  it('applies nudges', () => {
++    const frames = [cut(character(0, 90)), cut(character(0, 90))].map(metrics)
++    const layout = planLayout(frames, DEFAULT_LAYOUT_OPTIONS, [{ dx: 0, dy: 0 }, { dx: 5, dy: -3 }])
++    expect(layout.placements[1].x - layout.placements[0].x).toBe(5)
++    expect(layout.placements[1].y - layout.placements[0].y).toBe(-3)
++  })
++
++  it('handles no frames', () => {
++    expect(planLayout([])).toMatchObject({ cellWidth: 0, placements: [] })
++  })
++})
++
++describe('composeSheet', () => {
++  it('packs frames into a grid of equal cells with the feet on the baseline', () => {
++    const cutouts = [cut(character(0, 90)), cut(character(20, 70)), cut(character(-5, 95))]
++    const layout = planLayout(cutouts.map((c) => measure(c, contentBox(c)!)), { ...DEFAULT_LAYOUT_OPTIONS, airborneThreshold: 1 })
++    const sheet = composeSheet(cutouts, layout, 2)
++    expect(sheet.width).toBe(layout.cellWidth * 2)
++    expect(sheet.height).toBe(layout.cellHeight * 2)
++    // The bottom row of body pixels sits just above the baseline in each used cell.
++    const cx = Math.floor(layout.cellWidth / 2)
++    expect(pixel(sheet, cx, layout.baseline - 1)[3]).toBe(255)
++    expect(pixel(sheet, layout.cellWidth + cx, layout.baseline - 1)[3]).toBe(255)
++    expect(pixel(sheet, cx, layout.cellHeight + layout.baseline - 1)[3]).toBe(255)
++    expect(pixel(sheet, cx, layout.baseline)[3]).toBe(0)
++    // The empty fourth cell stays transparent.
++    expect(pixel(sheet, layout.cellWidth + cx, layout.cellHeight + layout.baseline - 1)[3]).toBe(0)
++  })
++})
++
++describe('sliceSheet', () => {
++  it('cuts equal cells and trims the grid lines', () => {
++    const colors = [RED, DARK, GREEN, { r: 1, g: 2, b: 3 }]
++    const sheet = createImage(40, 20)
++    colors.forEach((c, i) => rect(sheet, { left: (i % 2) * 20, top: Math.floor(i / 2) * 10, right: (i % 2) * 20 + 20, bottom: Math.floor(i / 2) * 10 + 10 }, c))
++    const cells = sliceSheet(sheet, 2, 2, 2)
++    expect(cells).toHaveLength(4)
++    expect(cells[0]).toMatchObject({ width: 16, height: 6 })
++    cells.forEach((cell, i) => expect(pixel(cell, 0, 0).slice(0, 3)).toEqual([colors[i].r, colors[i].g, colors[i].b]))
++  })
++})
++
++describe('naturalCompare', () => {
++  it('sorts numbered files in frame order', () => {
++    expect(['frame10.png', 'frame2.png', 'Frame1.png'].sort(naturalCompare)).toEqual(['Frame1.png', 'frame2.png', 'frame10.png'])
++  })
++})
++
++describe('resize', () => {
++  it('scales the size and keeps flat colors', () => {
++    const img = filled(10, 8, RED)
++    const half = resize(img, 0.5)
++    expect(half).toMatchObject({ width: 5, height: 4 })
++    expect(pixel(half, 2, 2)).toEqual([200, 30, 30, 255])
++    expect(resize(img, 1)).toBe(img)
++  })
++})
+diff --git a/src/lib/glue.ts b/src/lib/glue.ts
+new file mode 100644
+index 0000000..f3fc332
+--- /dev/null
++++ b/src/lib/glue.ts
+@@ -0,0 +1,344 @@
++import { type Rgb, rgbDistance } from './color'
++
++/**
++ * Pure image helpers for the Glue tab: cut each frame out of its chroma key background,
++ * line the frames up on one ground line and one vertical anchor, and pack them into a
++ * sheet. Images are plain RGBA buffers (the same layout as canvas ImageData), so all of
++ * this runs and tests without a browser.
++ */
++
++export interface RawImage {
++  width: number
++  height: number
++  /** RGBA, 4 bytes per pixel, row by row. */
++  data: Uint8ClampedArray
++}
++
++/** A rectangle with exclusive right and bottom edges. */
++export interface Box {
++  left: number
++  top: number
++  right: number
++  bottom: number
++}
++
++export function createImage(width: number, height: number): RawImage {
++  return { width, height, data: new Uint8ClampedArray(width * height * 4) }
++}
++
++const at = (img: RawImage, x: number, y: number) => (y * img.width + x) * 4
++
++/** Linear-interpolated quantile, q from 0 to 1. */
++const quantile = (values: number[], q: number) => {
++  const sorted = [...values].sort((a, b) => a - b)
++  const pos = (sorted.length - 1) * q
++  const lo = Math.floor(pos)
++  const hi = Math.ceil(pos)
++  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
++}
++
++const median = (values: number[]) => quantile(values, 0.5)
++
++/** The background color, taken as the per-channel median of the outermost 2 pixels on every edge. */
++export function detectKeyColor(img: RawImage): Rgb {
++  const r: number[] = []
++  const g: number[] = []
++  const b: number[] = []
++  const take = (x: number, y: number) => {
++    const i = at(img, x, y)
++    r.push(img.data[i])
++    g.push(img.data[i + 1])
++    b.push(img.data[i + 2])
++  }
++  const band = Math.min(2, img.width, img.height)
++  for (let d = 0; d < band; d++) {
++    for (let x = 0; x < img.width; x++) {
++      take(x, d)
++      take(x, img.height - 1 - d)
++    }
++    for (let y = band; y < img.height - band; y++) {
++      take(d, y)
++      take(img.width - 1 - d, y)
++    }
++  }
++  return { r: median(r), g: median(g), b: median(b) }
++}
++
++export interface KeyOptions {
++  /** RGB distance from the key color below which a pixel is fully removed. */
++  tolerance: number
++  /** Width of the fade from transparent to opaque beyond the tolerance. */
++  softness: number
++}
++
++export const DEFAULT_KEY_OPTIONS: KeyOptions = { tolerance: 90, softness: 40 }
++
++const isGreenKey = (key: Rgb) => key.g > key.r + 40 && key.g > key.b + 40
++
++/**
++ * A copy of the image with the key color made transparent. Edge pixels next to the
++ * removed background lose their green spill, so the outline doesn't keep a green halo.
++ */
++export function removeBackground(img: RawImage, key: Rgb, options: KeyOptions = DEFAULT_KEY_OPTIONS): RawImage {
++  const out: RawImage = { width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) }
++  const { tolerance, softness } = options
++  const d = out.data
++  for (let i = 0; i < d.length; i += 4) {
++    const dist = rgbDistance({ r: d[i], g: d[i + 1], b: d[i + 2] }, key)
++    const alpha = dist <= tolerance ? 0 : dist >= tolerance + softness ? 255 : Math.round((255 * (dist - tolerance)) / softness)
++    d[i + 3] = Math.min(d[i + 3], alpha)
++  }
++  if (isGreenKey(key)) {
++    for (let y = 0; y < out.height; y++) {
++      for (let x = 0; x < out.width; x++) {
++        const i = at(out, x, y)
++        if (d[i + 3] === 0) continue
++        const touchesBackground =
++          (x > 0 && d[i - 4 + 3] < 255) ||
++          (x < out.width - 1 && d[i + 4 + 3] < 255) ||
++          (y > 0 && d[i - out.width * 4 + 3] < 255) ||
++          (y < out.height - 1 && d[i + out.width * 4 + 3] < 255) ||
++          d[i + 3] < 255
++        if (touchesBackground) d[i + 1] = Math.min(d[i + 1], Math.max(d[i], d[i + 2]))
++      }
++    }
++  }
++  return out
++}
++
++/**
++ * The box around the visible content. Rows and columns with fewer than `minPixels`
++ * solid pixels don't count, so a few stray pixels don't stretch the box.
++ */
++export function contentBox(img: RawImage, minPixels = 3, alphaMin = 128): Box | null {
++  const rows = new Array<number>(img.height).fill(0)
++  const cols = new Array<number>(img.width).fill(0)
++  for (let y = 0; y < img.height; y++) {
++    for (let x = 0; x < img.width; x++) {
++      if (img.data[at(img, x, y) + 3] >= alphaMin) {
++        rows[y]++
++        cols[x]++
++      }
++    }
++  }
++  const first = (counts: number[]) => counts.findIndex((c) => c >= minPixels)
++  const last = (counts: number[]) => counts.length - 1 - [...counts].reverse().findIndex((c) => c >= minPixels)
++  const top = first(rows)
++  const left = first(cols)
++  if (top < 0 || left < 0) return null
++  return { left, top, right: last(cols) + 1, bottom: last(rows) + 1 }
++}
++
++export interface FrameMetrics {
++  box: Box
++  /** Height of the source image, for thresholds. */
++  imageHeight: number
++  /** The line under the lowest solid pixel. */
++  feetY: number
++  /** Mean x of the solid pixels in the top 15% of the content: the head or hat. */
++  headX: number
++  centerX: number
++}
++
++export function measure(img: RawImage, box: Box, alphaMin = 128): FrameMetrics {
++  const band = Math.max(4, Math.round((box.bottom - box.top) * 0.15))
++  let sum = 0
++  let count = 0
++  for (let y = box.top; y < Math.min(box.bottom, box.top + band); y++) {
++    for (let x = box.left; x < box.right; x++) {
++      if (img.data[at(img, x, y) + 3] >= alphaMin) {
++        sum += x + 0.5
++        count++
++      }
++    }
++  }
++  const centerX = (box.left + box.right) / 2
++  return { box, imageHeight: img.height, feetY: box.bottom, headX: count ? sum / count : centerX, centerX }
++}
++
++export type AnchorX = 'head' | 'center'
++
++export interface LayoutOptions {
++  /** What lines up vertically across frames: the head (walks, runs) or the content's center (lying poses). */
++  anchor: AnchorX
++  /** Put every grounded frame's feet on one baseline. Off keeps each frame's own vertical position. */
++  snapToGround: boolean
++  /** Feet this far above the ground (as a share of the image height) count as airborne and keep their lift. */
++  airborneThreshold: number
++  /** Empty space around the content in every cell. */
++  padding: number
++}
++
++export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
++  anchor: 'head',
++  snapToGround: true,
++  airborneThreshold: 0.03,
++  padding: 8,
++}
++
++export interface Nudge {
++  dx: number
++  dy: number
++  /** Force the frame airborne (true) or onto the ground (false). Undefined: detect it. */
++  airborne?: boolean
++}
++
++export interface Placement {
++  box: Box
++  /** Where the box's top-left corner goes inside the cell. */
++  x: number
++  y: number
++  airborne: boolean
++}
++
++export interface Layout {
++  cellWidth: number
++  cellHeight: number
++  /** The ground line inside the cell. */
++  baseline: number
++  placements: Placement[]
++}
++
++/**
++ * Where each frame goes inside a shared cell. Grounded frames get their feet on one
++ * baseline; airborne frames (jump, run flight) keep their height above the ground.
++ * The anchor (head or center) sits on the cell's vertical center line.
++ *
++ * The ground is the 75th percentile of the feet, not the median: in a run, half the
++ * frames can be in the air, and the median would land between the two groups.
++ */
++export function planLayout(
++  frames: FrameMetrics[],
++  options: LayoutOptions = DEFAULT_LAYOUT_OPTIONS,
++  nudges: Nudge[] = [],
++): Layout {
++  if (!frames.length) return { cellWidth: 0, cellHeight: 0, baseline: 0, placements: [] }
++  const ground = quantile(
++    frames.map((f) => f.feetY),
++    0.75,
++  )
++  const rel = frames.map((f, i) => {
++    const { dx = 0, dy = 0, airborne: forced } = nudges[i] ?? {}
++    const detected = ground - f.feetY > options.airborneThreshold * f.imageHeight
++    const airborne = options.snapToGround && (forced ?? detected)
++    const refY = options.snapToGround && !airborne ? f.feetY : ground
++    const anchorX = options.anchor === 'head' ? f.headX : f.centerX
++    return {
++      airborne,
++      left: f.box.left - anchorX + dx,
++      right: f.box.right - anchorX + dx,
++      top: f.box.top - refY + dy,
++      bottom: f.box.bottom - refY + dy,
++    }
++  })
++  const half = Math.max(...rel.map((r) => Math.max(-r.left, r.right)))
++  const cellWidth = Math.ceil(2 * (half + options.padding))
++  const minTop = Math.min(...rel.map((r) => r.top))
++  const maxBottom = Math.max(...rel.map((r) => r.bottom))
++  const cellHeight = Math.ceil(maxBottom - minTop + 2 * options.padding)
++  const baseline = Math.round(options.padding - minTop)
++  const center = cellWidth / 2
++  return {
++    cellWidth,
++    cellHeight,
++    baseline,
++    placements: frames.map((f, i) => ({
++      box: f.box,
++      x: Math.round(center + rel[i].left),
++      y: Math.round(baseline + rel[i].top),
++      airborne: rel[i].airborne,
++    })),
++  }
++}
++
++/** Draws `src` over `dst` with alpha blending, clipped to `clip` in `dst` coordinates. */
++function blit(dst: RawImage, src: RawImage, box: Box, x: number, y: number, clip: Box) {
++  for (let sy = box.top; sy < box.bottom; sy++) {
++    const ty = y + sy - box.top
++    if (ty < clip.top || ty >= clip.bottom) continue
++    for (let sx = box.left; sx < box.right; sx++) {
++      const tx = x + sx - box.left
++      if (tx < clip.left || tx >= clip.right) continue
++      const si = at(src, sx, sy)
++      const a = src.data[si + 3] / 255
++      if (!a) continue
++      const di = at(dst, tx, ty)
++      const da = dst.data[di + 3] / 255
++      const outA = a + da * (1 - a)
++      for (let c = 0; c < 3; c++) {
++        dst.data[di + c] = Math.round((src.data[si + c] * a + dst.data[di + c] * da * (1 - a)) / outA)
++      }
++      dst.data[di + 3] = Math.round(outA * 255)
++    }
++  }
++}
++
++/** Packs the cut-out frames into a transparent sheet, left to right and top to bottom. */
++export function composeSheet(cutouts: RawImage[], layout: Layout, columns: number): RawImage {
++  const cols = Math.max(1, Math.min(columns, cutouts.length || 1))
++  const rows = Math.max(1, Math.ceil(cutouts.length / cols))
++  const sheet = createImage(layout.cellWidth * cols, layout.cellHeight * rows)
++  cutouts.forEach((cutout, i) => {
++    const p = layout.placements[i]
++    if (!p) return
++    const ox = (i % cols) * layout.cellWidth
++    const oy = Math.floor(i / cols) * layout.cellHeight
++    const clip = { left: ox, top: oy, right: ox + layout.cellWidth, bottom: oy + layout.cellHeight }
++    blit(sheet, cutout, p.box, ox + p.x, oy + p.y, clip)
++  })
++  return sheet
++}
++
++/** Cuts a sheet into equal cells, trimming `inset` pixels from every cell edge (to drop grid lines). */
++export function sliceSheet(img: RawImage, columns: number, rows: number, inset = 3): RawImage[] {
++  const cells: RawImage[] = []
++  for (let r = 0; r < rows; r++) {
++    for (let c = 0; c < columns; c++) {
++      const left = Math.round((c * img.width) / columns) + inset
++      const right = Math.round(((c + 1) * img.width) / columns) - inset
++      const top = Math.round((r * img.height) / rows) + inset
++      const bottom = Math.round(((r + 1) * img.height) / rows) - inset
++      const cell = createImage(Math.max(0, right - left), Math.max(0, bottom - top))
++      for (let y = 0; y < cell.height; y++) {
++        const from = at(img, left, top + y)
++        cell.data.set(img.data.subarray(from, from + cell.width * 4), y * cell.width * 4)
++      }
++      cells.push(cell)
++    }
++  }
++  return cells
++}
++
++/** Sorts "frame2" before "frame10". */
++export function naturalCompare(a: string, b: string): number {
++  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
++}
++
++/** Bilinear resize by a factor (1 keeps the image as is). */
++export function resize(img: RawImage, factor: number): RawImage {
++  if (factor === 1) return img
++  const width = Math.max(1, Math.round(img.width * factor))
++  const height = Math.max(1, Math.round(img.height * factor))
++  const out = createImage(width, height)
++  const xRatio = img.width / width
++  const yRatio = img.height / height
++  for (let y = 0; y < height; y++) {
++    const sy = Math.min(img.height - 1, Math.max(0, (y + 0.5) * yRatio - 0.5))
++    const y0 = Math.floor(sy)
++    const y1 = Math.min(img.height - 1, y0 + 1)
++    const fy = sy - y0
++    for (let x = 0; x < width; x++) {
++      const sx = Math.min(img.width - 1, Math.max(0, (x + 0.5) * xRatio - 0.5))
++      const x0 = Math.floor(sx)
++      const x1 = Math.min(img.width - 1, x0 + 1)
++      const fx = sx - x0
++      const o = at(out, x, y)
++      for (let c = 0; c < 4; c++) {
++        const top = img.data[at(img, x0, y0) + c] * (1 - fx) + img.data[at(img, x1, y0) + c] * fx
++        const bottom = img.data[at(img, x0, y1) + c] * (1 - fx) + img.data[at(img, x1, y1) + c] * fx
++        out.data[o + c] = Math.round(top * (1 - fy) + bottom * fy)
++      }
++    }
++  }
++  return out
++}
+diff --git a/src/lib/imageIO.ts b/src/lib/imageIO.ts
+new file mode 100644
+index 0000000..a2659b9
+--- /dev/null
++++ b/src/lib/imageIO.ts
+@@ -0,0 +1,48 @@
++import type { RawImage } from './glue'
++
++/** Browser-only glue between files, canvases and the pure RawImage helpers. */
++
++export async function fileToRaw(file: Blob): Promise<RawImage> {
++  const bitmap = await createImageBitmap(file)
++  const canvas = document.createElement('canvas')
++  canvas.width = bitmap.width
++  canvas.height = bitmap.height
++  const ctx = canvas.getContext('2d')
++  if (!ctx) throw new Error('Canvas is not available in this browser.')
++  ctx.drawImage(bitmap, 0, 0)
++  bitmap.close()
++  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
++  return { width, height, data }
++}
++
++/** Paints the image onto the canvas, resizing the canvas to fit it. */
++export function paintRaw(canvas: HTMLCanvasElement, img: RawImage): void {
++  canvas.width = Math.max(1, img.width)
++  canvas.height = Math.max(1, img.height)
++  const ctx = canvas.getContext('2d')
++  if (!ctx || !img.width || !img.height) return
++  ctx.putImageData(new ImageData(new Uint8ClampedArray(img.data), img.width, img.height), 0, 0)
++}
++
++/** Saves the canvas as a PNG, scaled by `scale`, with smoothing off for pixel art. */
++export function downloadCanvasPng(source: HTMLCanvasElement, filename: string, scale = 1, smooth = true): void {
++  const out = document.createElement('canvas')
++  out.width = Math.max(1, Math.round(source.width * scale))
++  out.height = Math.max(1, Math.round(source.height * scale))
++  const ctx = out.getContext('2d')
++  if (!ctx) return
++  ctx.imageSmoothingEnabled = smooth
++  ctx.imageSmoothingQuality = 'high'
++  ctx.drawImage(source, 0, 0, out.width, out.height)
++  out.toBlob((blob) => {
++    if (!blob) return
++    const url = URL.createObjectURL(blob)
++    const a = document.createElement('a')
++    a.href = url
++    a.download = filename
++    document.body.appendChild(a)
++    a.click()
++    a.remove()
++    setTimeout(() => URL.revokeObjectURL(url), 0)
++  }, 'image/png')
++}
+diff --git a/src/lib/lint.test.ts b/src/lib/lint.test.ts
+index d0121c9..87df7b1 100644
+--- a/src/lib/lint.test.ts
++++ b/src/lib/lint.test.ts
+@@ -1,8 +1,11 @@
+ import { describe, expect, it } from 'vitest'
+ import { applyAssetPreset } from '../config/assetPresets'
++import { defaultFormValues } from '../config/defaults'
++import { GENRES } from '../config/genres'
+ import { cleanValues } from '../test/fixtures'
+ import type { FormValues, LintWarning } from '../types'
+-import { findBlockedName, hasMetaphor, lint } from './lint'
++import { asksForText, findBlockedName, hasMetaphor, lint } from './lint'
++import { parsePrompt } from './parsePrompt'
+ 
+ const rules = (warnings: LintWarning[]) => warnings.map((w) => w.rule)
+ const withValues = (edit: (v: FormValues) => void) => {
+@@ -128,3 +131,175 @@ describe('lint', () => {
+     })
+   })
+ })
++
++describe('8. palette name vs hex', () => {
++  it('flags a name whose hex is a different color, and says which color it is', () => {
++    const warnings = withValues((v) => {
++      v.style.palette[0] = { name: 'Indigo', hex: '#D2452D', usage: 'kimono' }
++      v.style.palette[1] = { name: 'Torii red', hex: '#264478', usage: 'gates' }
++    })
++    expect(warnings.filter((w) => w.rule === 'palette-name-mismatch')).toEqual([
++      expect.objectContaining({ field: 'style.palette.0.name', message: expect.stringContaining('#D2452D is red') }),
++      expect.objectContaining({ field: 'style.palette.1.name', message: expect.stringContaining('#264478 is blue') }),
++    ])
++  })
++
++  it('is quiet when the name has no color word or the hex is gray', () => {
++    const warnings = withValues((v) => {
++      v.style.palette[0] = { name: 'Ship wood', hex: '#7A4E2D', usage: '' }
++      v.style.palette[1] = { name: 'Blue steel', hex: '#808080', usage: '' }
++    })
++    expect(rules(warnings)).not.toContain('palette-name-mismatch')
++  })
++
++  it('is quiet for every genre preset palette', () => {
++    for (const genre of GENRES) {
++      const warnings = withValues((v) => (v.style.palette = genre.palette))
++      expect(rules(warnings), genre.id).not.toContain('palette-name-mismatch')
++    }
++  })
++})
++
++describe('9. text while excluding text', () => {
++  it.each([
++    ['character.signatureDetails.0', (v: FormValues) => (v.character.signatureDetails[0] = 'wristband with the word "luck"')],
++    ['character.legsAndFeet', (v: FormValues) => (v.character.legsAndFeet = 'hakama with a phrase in kanji')],
++    ['asset.heldItems', (v: FormValues) => (v.asset.heldItems = 'a sign that reads “closed” in the right hand')],
++  ])('flags %s', (field, edit) => {
++    expect(withValues(edit)).toContainEqual(expect.objectContaining({ rule: 'text-conflict', field }))
++  })
++
++  it('is quiet when "no text" is not excluded', () => {
++    const warnings = withValues((v) => {
++      v.character.signatureDetails[0] = 'wristband with the word "luck"'
++      v.asset.exclusions = ['no logos']
++    })
++    expect(rules(warnings)).not.toContain('text-conflict')
++  })
++
++  it('does not count apostrophes or ordinary words as text', () => {
++    expect(asksForText("the ranger's star badge, textured leather")).toBe(false)
++  })
++})
++
++describe('10 and 11. lighting', () => {
++  it('flags mood lighting on a sprite', () => {
++    const warnings = withValues((v) => (v.asset.lighting = 'cold moonlight from above, soft shadows'))
++    expect(warnings).toContainEqual(expect.objectContaining({ rule: 'sprite-lighting', field: 'asset.lighting' }))
++  })
++
++  it('allows mood lighting on a background', () => {
++    const warnings = withValues((v) => {
++      Object.assign(v.asset, applyAssetPreset(v.asset, 'background'), { subject: 'harbor at night' })
++      v.asset.lighting = 'cold moonlight from above'
++    })
++    expect(rules(warnings)).not.toContain('sprite-lighting')
++  })
++
++  it('flags warm shading against cold lighting, once', () => {
++    const warnings = withValues((v) => {
++      Object.assign(v.asset, applyAssetPreset(v.asset, 'background'), { subject: 'harbor' })
++      v.style.linesAndShading = 'bold outlines, warm sunny highlights'
++      v.asset.lighting = 'cold light from above'
++    })
++    expect(rules(warnings).filter((r) => r === 'lighting-conflict')).toHaveLength(1)
++  })
++
++  it('leaves a deliberate warm and cold split in one field alone', () => {
++    const warnings = withValues((v) => (v.style.linesAndShading = 'warm highlights, cold shadows'))
++    expect(rules(warnings)).not.toContain('lighting-conflict')
++  })
++})
++
++describe('12. the same gear held and worn', () => {
++  it('flags a gun in the outfit when a pistol is held', () => {
++    const warnings = withValues((v) => {
++      v.character.torso = 'leather jacket, a gun on the right side of the waist'
++      v.asset.heldItems = 'a pistol in the right hand'
++    })
++    expect(warnings).toContainEqual(
++      expect.objectContaining({ rule: 'duplicate-gear', field: 'character.torso', message: expect.stringContaining('a gun') }),
++    )
++  })
++
++  it('accepts an empty holster or scabbard', () => {
++    const warnings = withValues((v) => {
++      v.character.torso = 'empty holster on the right hip; empty scabbard on the left hip'
++      v.asset.heldItems = 'a pistol in the right hand, a sword in the left hand'
++    })
++    expect(rules(warnings)).not.toContain('duplicate-gear')
++  })
++
++  it('is quiet when held and worn gear are different kinds', () => {
++    const warnings = withValues((v) => {
++      v.character.torso = 'sword scabbard on the left hip'
++      v.asset.heldItems = 'a lantern in the right hand'
++    })
++    expect(rules(warnings)).not.toContain('duplicate-gear')
++  })
++})
++
++describe('13. proportions in heads', () => {
++  it.each(['1 head, average torso', '1head, long legs, broad shoulders', 'average build'])('flags "%s"', (text) => {
++    expect(rules(withValues((v) => (v.character.proportions = text)))).toContain('proportions-heads')
++  })
++
++  it.each(['3 heads tall, chunky', 'seven heads tall', '2.5 heads tall, chibi', 'four and a half heads high'])(
++    'accepts "%s"',
++    (text) => {
++      expect(rules(withValues((v) => (v.character.proportions = text)))).not.toContain('proportions-heads')
++    },
++  )
++})
++
++describe('prompts that went wrong in testing', () => {
++  const lintPrompt = (text: string) => rules(lint(parsePrompt(text, defaultFormValues()).values))
++
++  it('catches the pirate run prompt problems', () => {
++    const found = lintPrompt(`[STYLE]
++Art style: 2D hand-painted
++Palette: Ocean teal #1F6F78 (sea, sashes); Sail canvas #E6D8B5 (sails, shirts); Ship wood #7A4E2D (hulls, barrels, boots); Treasure gold #E1B53A (coins, buttons, earrings); Coat red #A3262A (coats, bandanas)
++Lines and shading: bold dark outlines, 2-tone shading, warm sunny highlights
++
++[CHARACTER]
++Name: Dread pirate Robert
++Proportions: 1 head, 2 arms, 2 legs and a torso all average
++Head: a pirate head, an eye patch and a black beard
++Torso: a blouse with a leather jacked with a sheath for a sword on the left side of the waist line, and a gun in the right side.
++Legs and feet: Brown leather boots, a leather pants.
++Signature details: a perl collar; 2 wrist bands one on each arm with the follow words: "luck" and "treasure"; a red waistband
++
++[ASSET]
++Type: Sprite sheet
++Frames: 8, in a grid of 4 columns and 2 rows
++Action: running fast
++Held items: a pistol in the right hand and a knife in the left hand
++View: Side view, facing right
++Background: solid flat #00FF00, no shadows or texture
++Lighting: cold moonlight from above, soft shadows
++Exclude: no text, no logos, no watermark, no extra characters`)
++    expect(found).toEqual(expect.arrayContaining(['proportions-heads', 'text-conflict', 'sprite-lighting', 'duplicate-gear']))
++    expect(found.filter((r) => r === 'duplicate-gear')).toHaveLength(2) // the gun and the sword
++  })
++
++  it('catches the samurai prompt problems', () => {
++    const found = lintPrompt(`[STYLE]
++Art style: Pixel art, 64x64 sprite resolution
++Palette: Indigo #D2452D (kimono, cloth); Torii red #264478 (gates, accents); Sakura pink #F4B6C2 (blossoms, highlights); Charcoal #2B2B2B (hair, lacquered armor); Washi cream #F2E8D5 (paper walls, sky)
++Lines and shading: bold dark outlines, flat color areas with minimal shading, wave patterns on fabric
++
++[CHARACTER]
++Name: shinichiro wannabe
++Proportions: 1head, long legs, broad shoulders
++Legs and feet: Samurai sandals and skirts with a Japanese phrase: "pound like water" in kanji.
++
++[ASSET]
++Type: Sprite
++Action: standing upright
++Held items: right hand wristband
++Lighting: cold moonlight from above, soft shadows
++Exclude: no text, no logos, no watermark, no extra characters`)
++    expect(found.filter((r) => r === 'palette-name-mismatch')).toHaveLength(2)
++    expect(found).toEqual(expect.arrayContaining(['proportions-heads', 'text-conflict', 'sprite-lighting']))
++  })
++})
+diff --git a/src/lib/lint.ts b/src/lib/lint.ts
+index fd727cb..b527bff 100644
+--- a/src/lib/lint.ts
++++ b/src/lib/lint.ts
+@@ -2,16 +2,66 @@ import { usesChromaKey } from '../config/assetPresets'
+ import { CHROMA_GREEN, CHROMA_MAGENTA } from '../config/defaults'
+ import { IP_BLOCKLIST } from '../config/ipBlocklist'
+ import type { FormValues, LintWarning } from '../types'
+-import { hexDistance, isValidHex, normalizeHex } from './color'
++import { hexDistance, isValidHex, nameHexMismatch, normalizeHex } from './color'
+ 
+ export const METAPHOR_MESSAGE = 'Describe the shape in plain geometry instead. Comparisons get exaggerated.'
+ export const IP_MESSAGE =
+   'Names an existing character or franchise. The model will drift toward it, and the asset may not be yours to ship.'
+ export const HANDS_MESSAGE = "Say which hand, from the character's perspective."
+ export const CHROMA_CLASH_DISTANCE = 100
++export const TEXT_CONFLICT_MESSAGE =
++  'This asks for written text, but Exclude says "no text", so the model gets both. Models also misspell text, and it is unreadable at sprite size. Drop it here and add it after generating, or remove "no text" and give the exact characters.'
++export const SPRITE_LIGHTING_MESSAGE =
++  'Mood lighting gets baked into the sprite, so it looks wrong in every other scene. Keep sprites even and neutral, and put the mood in the background art.'
++export const LIGHTING_CONFLICT_MESSAGE =
++  'Lighting and Lines and shading pull in opposite directions (warm vs cold). The model blends them or picks one at random. Keep one.'
++export const PROPORTIONS_MESSAGE =
++  'Give the height in heads, like "3 heads tall" for a chunky build or "7 heads tall" for a realistic one. Without a number the model picks the build itself.'
+ 
+ const METAPHOR_RE = /\b(?:like an?|looks like|as if|resembles|similar to)\b|\b[a-z]+-shaped\b/i
+ 
++const QUOTED_RE = /["“][^"”]+["”]/
++const TEXT_WORDS_RE = /\b(?:kanji|lettering|letters|words?|phrase|inscription|inscribed|written|writing|slogan|caption|text)\b/i
++const NO_TEXT_RE = /\btext\b/i
++
++const WARM_RE = /\b(?:warm|sunny|sunlit|sunlight|sunset|sunrise|golden hour|daylight|midday|noon)\b/i
++const COLD_RE = /\b(?:cold|moonlight|moonlit|night|nighttime|icy|frosty)\b/i
++const MOOD_LIGHT_RE =
++  /\b(?:moonlight|moonlit|sunset|sunrise|golden hour|dramatic|rim[- ]?light|backlit|backlight|spotlight|candlelight|torchlight|firelight|neon|night)\b/i
++
++const PROPORTIONS_RE =
++  /\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine)(?:\s+and\s+a\s+half)?\s*-?\s*heads?\s*(?:tall|high)\b/i
++
++/** Gear that gets drawn twice when it is both held and part of the outfit. */
++const GEAR: [name: string, re: RegExp][] = [
++  ['gun', /\b(?:guns?|pistols?|revolvers?|muskets?|rifles?|shotguns?|blasters?|firearms?|flintlocks?)\b/i],
++  ['blade', /\b(?:knife|knives|daggers?|swords?|cutlass(?:es)?|katanas?|sabers?|sabres?|blades?|machetes?)\b/i],
++]
++const CLAUSE_SPLIT_RE = /[,;.]|\band\b/i
++
++type Temperature = 'warm' | 'cold' | 'both' | null
++
++function temperature(text: string | undefined): Temperature {
++  const warm = WARM_RE.test(text ?? '')
++  const cold = COLD_RE.test(text ?? '')
++  return warm && cold ? 'both' : warm ? 'warm' : cold ? 'cold' : null
++}
++
++/** True when the text asks for something written: a quoted phrase, or words like "kanji" or "lettering". */
++export function asksForText(text: string): boolean {
++  return QUOTED_RE.test(text) || TEXT_WORDS_RE.test(text)
++}
++
++/** The gear families in `text` that are not marked as empty (an empty holster is fine). */
++function gearIn(text: string): Set<string> {
++  const found = new Set<string>()
++  for (const clause of text.split(CLAUSE_SPLIT_RE)) {
++    if (/\bempty\b/i.test(clause)) continue
++    for (const [name, re] of GEAR) if (re.test(clause)) found.add(name)
++  }
++  return found
++}
++
+ const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+ 
+@@ -128,5 +178,67 @@ export function lint(values: FormValues, options: LintOptions = {}): LintWarning
+     warnings.push({ rule: 'ambiguous-hands', field: 'asset.heldItems', message: HANDS_MESSAGE })
+   }
+ 
++  // 8. Palette name says one color, hex says another
++  style.palette.forEach((c, i) => {
++    const actual = nameHexMismatch(c.name, c.hex)
++    if (actual) {
++      warnings.push({
++        rule: 'palette-name-mismatch',
++        field: `style.palette.${i}.name`,
++        message: `“${c.name.trim()}” is named one color, but ${normalizeHex(c.hex)} is ${actual}. The model gets both and mixes them up. Fix the name or the hex.`,
++      })
++    }
++  })
++
++  // 9. Asks for text while excluding text
++  if (asset.exclusions.some((e) => NO_TEXT_RE.test(e))) {
++    const describing = texts.filter(([field]) => field.startsWith('character.') || field === 'asset.heldItems' || field === 'asset.subject')
++    for (const [field, value] of describing) {
++      if (value?.trim() && field !== 'character.name' && asksForText(value)) {
++        warnings.push({ rule: 'text-conflict', field, message: TEXT_CONFLICT_MESSAGE })
++      }
++    }
++  }
++
++  // 10. Mood lighting on a sprite, 11. warm vs cold lighting
++  const moodySprite = usesChromaKey(asset.type) && MOOD_LIGHT_RE.test(asset.lighting)
++  if (moodySprite) {
++    warnings.push({ rule: 'sprite-lighting', field: 'asset.lighting', message: SPRITE_LIGHTING_MESSAGE })
++  }
++  const shadingTemp = temperature(style.linesAndShading)
++  const lightingTemp = temperature(asset.lighting)
++  const opposite =
++    (shadingTemp === 'warm' && lightingTemp === 'cold') || (shadingTemp === 'cold' && lightingTemp === 'warm')
++  if (opposite && !moodySprite) {
++    warnings.push({ rule: 'lighting-conflict', field: 'asset.lighting', message: LIGHTING_CONFLICT_MESSAGE })
++  }
++
++  // 12. The same kind of gear held and worn, which gets drawn twice
++  if (withCharacter && asset.heldItems?.trim()) {
++    const held = gearIn(asset.heldItems)
++    const outfit: [string, string][] = [
++      ['character.head', character.head],
++      ['character.torso', character.torso],
++      ['character.armsAndHands', character.armsAndHands],
++      ['character.legsAndFeet', character.legsAndFeet],
++      ...character.signatureDetails.map((d, i): [string, string] => [`character.signatureDetails.${i}`, d]),
++    ]
++    for (const [field, value] of outfit) {
++      for (const gear of gearIn(value)) {
++        if (!held.has(gear)) continue
++        warnings.push({
++          rule: 'duplicate-gear',
++          field,
++          message: `Held items already has a ${gear}, and this field describes one too, so the model may draw two. If it's worn gear, call it an empty holster or scabbard; otherwise describe it in one place only.`,
++        })
++      }
++    }
++  }
++
++  // 13. Proportions without a height in heads
++  if (withCharacter && character.proportions.trim() && !PROPORTIONS_RE.test(character.proportions)) {
++    warnings.push({ rule: 'proportions-heads', field: 'character.proportions', message: PROPORTIONS_MESSAGE })
++  }
++
+   return warnings
+ }
+diff --git a/src/lib/parsePrompt.ts b/src/lib/parsePrompt.ts
+index bd35ad7..00ad979 100644
+--- a/src/lib/parsePrompt.ts
++++ b/src/lib/parsePrompt.ts
+@@ -76,6 +76,9 @@ const ASSET_KEYS: Key[] = [
+   'exclude',
+ ]
+ 
++/** Lines buildPrompt adds on its own. They have no form field, so they are read and dropped. */
++const GENERATED_LABELS = new Set(['sides'])
++
+ /** The blocks whose fields fill the form. Any other [BLOCK] is skipped. */
+ const FORM_BLOCKS = new Set(['STYLE', 'CHARACTER', 'ASSET'])
+ const LABEL_RE = /^([A-Za-z][A-Za-z ]*?)\s*:\s*(.*)$/
+@@ -176,6 +179,10 @@ export function parsePrompt(text: string, current: FormValues): ParseResult {
+       continue
+     }
+     const label = LABEL_RE.exec(trimmed)
++    if (label && GENERATED_LABELS.has(label[1].toLowerCase())) {
++      currentKey = null
++      continue
++    }
+     const key = label ? LABELS[label[1].toLowerCase()] : undefined
+     if (label && key) {
+       raw[key] = label[2].trim()
+diff --git a/src/lib/storage.test.ts b/src/lib/storage.test.ts
+index 187340c..4c9ebec 100644
+--- a/src/lib/storage.test.ts
++++ b/src/lib/storage.test.ts
+@@ -89,14 +89,14 @@ describe('animation storage', () => {
+     const animations = defaultAnimations()
+     animations[0] = { ...animations[0], frames: undefined, enabled: false }
+     animations.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: '', keyPoses: [] })
+-    expect(saveAnimations({ layout: 'row', animations }, storage)).toBe(true)
+-    expect(loadAnimations(storage)).toEqual({ layout: 'row', animations })
++    expect(saveAnimations({ layout: 'row', output: 'frames', animations }, storage)).toBe(true)
++    expect(loadAnimations(storage)).toEqual({ layout: 'row', output: 'frames', animations })
+   })
+ 
+   it('keeps edited preset poses saved by the current version', () => {
+     const storage = memoryStorage()
+     const animations = defaultAnimations().map((a) => (a.id === 'run' ? { ...a, keyPoses: ['my pose'] } : a))
+-    saveAnimations({ layout: 'grid', animations }, storage)
++    saveAnimations({ layout: 'grid', output: 'sheet', animations }, storage)
+     expect(loadAnimations(storage).animations.find((a) => a.id === 'run')?.keyPoses).toEqual(['my pose'])
+   })
+ 
+@@ -106,8 +106,9 @@ describe('animation storage', () => {
+     )
+     v1.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: 'sliding', keyPoses: ['x'] })
+     const storage = memoryStorage({ [STORAGE_KEYS.animations]: JSON.stringify(v1) })
+-    const { layout, animations } = loadAnimations(storage)
++    const { layout, output, animations } = loadAnimations(storage)
+     expect(layout).toBe('grid')
++    expect(output).toBe('sheet')
+     const run = animations.find((a) => a.id === 'run')!
+     expect(run).toMatchObject({ frames: 6, enabled: false })
+     expect(run.keyPoses).toEqual(defaultAnimations().find((a) => a.id === 'run')!.keyPoses)
+diff --git a/src/lib/storage.ts b/src/lib/storage.ts
+index cefd3b1..733a3c9 100644
+--- a/src/lib/storage.ts
++++ b/src/lib/storage.ts
+@@ -2,6 +2,7 @@ import type { z } from 'zod'
+ import {
+   ANIMATION_PRESETS,
+   ANIMATION_PRESETS_VERSION,
++  DEFAULT_ANIMATION_OUTPUT,
+   DEFAULT_FRAME_LAYOUT,
+   defaultAnimations,
+ } from '../config/animations'
+@@ -14,7 +15,7 @@ import {
+   styleProfileSchema,
+   type ExportFile,
+ } from '../schemas'
+-import type { AnimationSpec, AssetRequest, CharacterProfile, FrameLayout, StyleProfile } from '../types'
++import type { AnimationOutput, AnimationSpec, AssetRequest, CharacterProfile, FrameLayout, StyleProfile } from '../types'
+ 
+ export const STORAGE_KEYS = {
+   styles: 'apb:styles',
+@@ -138,11 +139,12 @@ export function saveAssetDraft(asset: AssetRequest, storage = getStorage()): boo
+ 
+ export interface AnimationSettings {
+   layout: FrameLayout
++  output: AnimationOutput
+   animations: AnimationSpec[]
+ }
+ 
+ export function defaultAnimationSettings(): AnimationSettings {
+-  return { layout: DEFAULT_FRAME_LAYOUT, animations: defaultAnimations() }
++  return { layout: DEFAULT_FRAME_LAYOUT, output: DEFAULT_ANIMATION_OUTPUT, animations: defaultAnimations() }
+ }
+ 
+ /**
+@@ -159,7 +161,7 @@ function refreshPresets(list: AnimationSpec[]): AnimationSpec[] {
+ 
+ /**
+  * The Animations tab settings. Version 1 stored a bare list; later versions store
+- * `{ version, layout, animations }`. Falls back to the presets when nothing valid is stored.
++ * `{ version, layout, output, animations }`. Falls back to the presets when nothing valid is stored.
+  */
+ export function loadAnimations(storage: KeyValueStorage | null = getStorage()): AnimationSettings {
+   if (!storage) return defaultAnimationSettings()
+@@ -170,7 +172,8 @@ export function loadAnimations(storage: KeyValueStorage | null = getStorage()):
+   if (!list.length) return defaultAnimationSettings()
+   const version = typeof stored.version === 'number' ? stored.version : 1
+   const layout = stored.layout === 'row' || stored.layout === 'grid' ? stored.layout : DEFAULT_FRAME_LAYOUT
+-  return { layout, animations: version < ANIMATION_PRESETS_VERSION ? refreshPresets(list) : list }
++  const output = stored.output === 'sheet' || stored.output === 'frames' ? stored.output : DEFAULT_ANIMATION_OUTPUT
++  return { layout, output, animations: version < ANIMATION_PRESETS_VERSION ? refreshPresets(list) : list }
+ }
+ 
+ export function saveAnimations(settings: AnimationSettings, storage = getStorage()): boolean {
+diff --git a/src/types.ts b/src/types.ts
+index 0289e3b..5d74f06 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -33,6 +33,8 @@ export type AssetType = 'sprite' | 'sprite-strip' | 'portrait' | 'item-icon' | '
+ export type View = 'side-right' | 'side-left' | 'three-quarter-front' | 'front' | 'top-down' | 'isometric'
+ export type AspectRatio = '1:1' | '4:3' | '16:9' | '9:16' | 'custom'
+ export type FrameLayout = 'row' | 'grid'
++/** Animations tab output: one sheet prompt per animation, or one single-sprite prompt per frame. */
++export type AnimationOutput = 'sheet' | 'frames'
+ 
+ export interface AssetRequest {
+   type: AssetType
+@@ -84,6 +86,12 @@ export interface LintWarning {
+     | 'chroma-clash'
+     | 'missing-no-text'
+     | 'ambiguous-hands'
++    | 'palette-name-mismatch'
++    | 'text-conflict'
++    | 'sprite-lighting'
++    | 'lighting-conflict'
++    | 'duplicate-gear'
++    | 'proportions-heads'
+   /** Form field path, e.g. "character.head" or "style.palette.2.usage". */
+   field: string
+   message: string

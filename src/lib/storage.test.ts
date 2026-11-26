@@ -89,14 +89,14 @@ describe('animation storage', () => {
     const animations = defaultAnimations()
     animations[0] = { ...animations[0], frames: undefined, enabled: false }
     animations.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: '', keyPoses: [] })
-    expect(saveAnimations({ layout: 'row', animations }, storage)).toBe(true)
-    expect(loadAnimations(storage)).toEqual({ layout: 'row', animations })
+    expect(saveAnimations({ layout: 'row', output: 'frames', animations }, storage)).toBe(true)
+    expect(loadAnimations(storage)).toEqual({ layout: 'row', output: 'frames', animations })
   })
 
   it('keeps edited preset poses saved by the current version', () => {
     const storage = memoryStorage()
     const animations = defaultAnimations().map((a) => (a.id === 'run' ? { ...a, keyPoses: ['my pose'] } : a))
-    saveAnimations({ layout: 'grid', animations }, storage)
+    saveAnimations({ layout: 'grid', output: 'sheet', animations }, storage)
     expect(loadAnimations(storage).animations.find((a) => a.id === 'run')?.keyPoses).toEqual(['my pose'])
   })
 
@@ -106,8 +106,9 @@ describe('animation storage', () => {
     )
     v1.push({ id: 'custom', name: 'Wall slide', enabled: true, frames: 5, loop: true, motion: 'sliding', keyPoses: ['x'] })
     const storage = memoryStorage({ [STORAGE_KEYS.animations]: JSON.stringify(v1) })
-    const { layout, animations } = loadAnimations(storage)
+    const { layout, output, animations } = loadAnimations(storage)
     expect(layout).toBe('grid')
+    expect(output).toBe('sheet')
     const run = animations.find((a) => a.id === 'run')!
     expect(run).toMatchObject({ frames: 6, enabled: false })
     expect(run.keyPoses).toEqual(defaultAnimations().find((a) => a.id === 'run')!.keyPoses)

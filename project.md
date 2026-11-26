@@ -167,6 +167,28 @@ A third output tab that generates one sprite strip prompt per animation, for bui
 - Stored lists carry a presets version. Presets saved by an older version get the new motion and poses, and keep their on/off, frame count and loop settings.
 - Copying is blocked when no animation is on, when an enabled animation has an invalid frame count, or by the usual form rules.
 
+### One prompt per frame
+
+An **Output** switch at the top of the Animations tab: **One sheet per animation** (the sheet prompts above) or **One prompt per frame** (`src/lib/buildFrames.ts`). Sheets kept failing in the same way: the model drew the second half of a walk or run as a copy of the first, so the same leg led in every frame. Image models are good at one pose and bad at keeping motion straight across a grid, so this mode gives every key pose its own prompt.
+
+- Each frame is a normal single-sprite prompt: `Type: Sprite`, `Action:` the frame's pose, `Aspect ratio: 1:1`, and a fixed framing so separate generations line up: full body, centered, about 80% of the image height when standing, ground line 10% above the bottom edge, airborne poses above it (plus "same scale and position as the reference image" when the character has one). Style and Character blocks are byte-identical to every other prompt.
+- A `[FRAME]` block follows: `Animation: Run, frame 5 of 8, part of a looping cycle`, the motion (without sheet-only clauses about cycle halves), the view lock, the limbs legend, props, `Single pose: exactly one character in one pose, not a sprite sheet...` and a consistency line.
+- In an even near/far cycle, a second-half frame that is the near/far swap of a first-half frame gets `Based on: frame N. Attach your approved frame N as a second reference image and draw that exact pose with the opposite leg and arm leading...`. The UI tags those frames "attach frame N too" and says to generate the first half first.
+- Frames are grouped per animation, each frame with its own Copy button, plus Copy per animation and Copy all. A workflow note explains the order (idle first as the reference, attach it everywhere, first half before second half, then the Glue tab) and warns when the character has no reference image.
+- Copying is blocked for enabled animations whose pose count doesn't match the frame count.
+- The choice is saved with the animations as `output: 'sheet' | 'frames'`.
+
+## Glue tab
+
+A fourth output tab that turns generated images into one clean, aligned sprite sheet, entirely in the browser (`src/lib/glue.ts` for the pure image work, `src/lib/imageIO.ts` for canvas and files, `src/components/GluePanel.tsx`).
+
+- **Input:** several images (one per frame, sorted by file name with numbers in order) or a single image, which is treated as a sheet and cut into a columns × rows grid (starting guess: 4 columns, rows from the aspect ratio), trimming 3 px from every cell edge to drop grid lines.
+- **Background removal:** the key color is the per-channel median of the image border, so it works on the off-green that generators actually produce. Pixels near it become transparent with a soft edge, and edge pixels lose their green spill. A strength slider sets the tolerance.
+- **Alignment:** every frame's content box is found (ignoring stray pixels). Grounded frames get their feet on one baseline. Frames whose feet are well above the ground (3% of the image height) count as airborne and keep their lift; the ground is the 75th percentile of the feet, since half of a run's frames can be in the air. Each frame can be forced to "On the ground" or "In the air". Horizontally, the head (mean x of the top 15% of the content) or the body center goes on the cell's center line.
+- **Per-frame fixes:** size %, x and y offsets, move up or down, remove. Each row shows a thumbnail of its cell.
+- **Output:** a grid (near-square, same as the animation sheets) or one row of equal cells, padded. A looping preview with a speed slider, the sheet with its cell size (for importing into an engine), and **Download sheet PNG** with a transparent background, at 100%, 50%, 25% or 12.5%, with an optional sharp (nearest-neighbor) scaling for pixel art.
+- The panel stays mounted while hidden, so loaded frames survive switching tabs. Nothing is uploaded anywhere.
+
 ## Fill from prompt
 
 A header button opens a panel where a prompt can be pasted and read back into the form (`src/lib/parsePrompt.ts`, pure, the inverse of `buildPrompt`).

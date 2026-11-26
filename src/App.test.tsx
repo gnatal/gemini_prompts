@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { defaultAnimations } from './config/animations'
 import { STORAGE_KEYS } from './lib/storage'
 
 const preview = () => screen.getByTestId('prompt-preview')
@@ -335,5 +336,28 @@ describe('App', () => {
     expect(screen.getByLabelText('Action')).toHaveValue('running')
     expect(preview()).toHaveTextContent('Frames: 8, in a grid of 4 columns and 2 rows')
     expect(preview()).toHaveTextContent('Signature details: a pearl collar; a red waistband')
+  })
+
+  it('switches the animations to one prompt per frame and points to the Glue tab', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('tab', { name: 'Animations' }))
+    const panel = screen.getByRole('region', { name: 'Animations' })
+    await user.click(within(panel).getByLabelText('One prompt per frame'))
+
+    const expected = defaultAnimations()
+      .filter((a) => a.enabled)
+      .reduce((n, a) => n + (a.frames ?? 0), 0)
+    expect(screen.queryAllByTestId('animation-prompt')).toHaveLength(0)
+    const frames = screen.getAllByTestId('frame-prompt')
+    expect(frames).toHaveLength(expected)
+    expect(frames[0].textContent).toContain('Single pose: exactly one character in one pose')
+    expect(within(panel).getByText(/Turn on “I will attach an approved reference image”/)).toBeInTheDocument()
+
+    expect(screen.queryByRole('region', { name: 'Glue frames' })).not.toBeInTheDocument()
+    await user.click(within(panel).getByRole('button', { name: 'Open the Glue tab' }))
+    expect(screen.getByRole('tab', { name: 'Glue' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('region', { name: 'Glue frames' })).toBeVisible()
+    expect(screen.getByLabelText('Frame images')).toBeInTheDocument()
   })
 })

@@ -33,6 +33,8 @@ export type AssetType = 'sprite' | 'sprite-strip' | 'portrait' | 'item-icon' | '
 export type View = 'side-right' | 'side-left' | 'three-quarter-front' | 'front' | 'top-down' | 'isometric'
 export type AspectRatio = '1:1' | '4:3' | '16:9' | '9:16' | 'custom'
 export type FrameLayout = 'row' | 'grid'
+/** Animations tab output: one sheet prompt per animation, or one single-sprite prompt per frame. */
+export type AnimationOutput = 'sheet' | 'frames'
 
 export interface AssetRequest {
   type: AssetType

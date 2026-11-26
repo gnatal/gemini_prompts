@@ -5,6 +5,7 @@ import { AssetSection } from './components/AssetSection'
 import { BatchPanel } from './components/BatchPanel'
 import { CharacterSection } from './components/CharacterSection'
 import { FeedbackContext, type Feedback } from './components/feedback'
+import { GluePanel } from './components/GluePanel'
 import { buttonClass } from './components/Field'
 import { LintSummary } from './components/LintSummary'
 import type { ProfileControls } from './components/ProfileBar'
@@ -15,6 +16,7 @@ import { Toast } from './components/Toast'
 import { defaultAsset, defaultCharacter, defaultStyle } from './config/defaults'
 import { animationAsset, buildAnimationSet, validateAnimations } from './lib/buildAnimations'
 import { buildBatch, joinBatch, parseActions } from './lib/buildBatch'
+import { buildFrameSet, validateFrameMode } from './lib/buildFrames'
 import { buildPrompt } from './lib/buildPrompt'
 import { copyText, downloadText } from './lib/clipboard'
 import { deepEqual } from './lib/deepEqual'
@@ -50,9 +52,9 @@ function loadInitial() {
   return { stored, values }
 }
 
-type Tab = 'single' | 'batch' | 'animations'
+type Tab = 'single' | 'batch' | 'animations' | 'glue'
 
-const TAB_LABELS: Record<Tab, string> = { single: 'Single prompt', batch: 'Batch', animations: 'Animations' }
+const TAB_LABELS: Record<Tab, string> = { single: 'Single prompt', batch: 'Batch', animations: 'Animations', glue: 'Glue' }
 type Notice = { kind: 'error' | 'info'; text: string }
 
 export default function App() {
@@ -69,7 +71,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('single')
   const [batchText, setBatchText] = useState('')
   const [animationSettings, setAnimationSettings] = useState(loadAnimations)
-  const { animations, layout } = animationSettings
+  const { animations, layout, output } = animationSettings
   const [toast, setToast] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
@@ -98,8 +100,10 @@ export default function App() {
   const animationPrompts = buildAnimationSet(values.style, values.character, values.asset, animations, layout)
   // Each animation supplies its own action, frames and framing, so only the other form rules apply.
   const firstAnimation = animationPrompts[0]?.spec
+  const frameSets = output === 'frames' ? buildFrameSet(values.style, values.character, values.asset, animations) : []
   const animationIssues = [
     ...validateAnimations(animations),
+    ...(output === 'frames' ? validateFrameMode(animations) : []),
     ...(firstAnimation ? validateForm({ ...values, asset: animationAsset(values.asset, firstAnimation, layout) }) : []),
   ]
 
@@ -255,12 +259,16 @@ export default function App() {
   const batchBlocked = batchIssues.length > 0 || batchPrompts.length === 0
   const copyAll = () =>
     copy(joinBatch(batchPrompts), `Copied ${batchPrompts.length} ${batchPrompts.length === 1 ? 'prompt' : 'prompts'}`)
-  const animationsBlocked = animationIssues.length > 0 || animationPrompts.length === 0
+  const framePrompts = frameSets.flatMap((s) => s.frames.map((f) => f.prompt))
+  const animationOutputCount = output === 'frames' ? framePrompts.length : animationPrompts.length
+  const animationsBlocked = animationIssues.length > 0 || animationOutputCount === 0
   const copyAllAnimations = () =>
-    copy(
-      joinBatch(animationPrompts.map((a) => a.prompt)),
-      `Copied ${animationPrompts.length} animation ${animationPrompts.length === 1 ? 'prompt' : 'prompts'}`,
-    )
+    output === 'frames'
+      ? copy(joinBatch(framePrompts), `Copied ${framePrompts.length} frame ${framePrompts.length === 1 ? 'prompt' : 'prompts'}`)
+      : copy(
+          joinBatch(animationPrompts.map((a) => a.prompt)),
+          `Copied ${animationPrompts.length} animation ${animationPrompts.length === 1 ? 'prompt' : 'prompts'}`,
+        )
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -333,7 +341,7 @@ export default function App() {
 
             <aside className="flex min-w-0 flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
               <div role="tablist" aria-label="Output mode" className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
-                {(['single', 'batch', 'animations'] as const).map((t) => (
+                {(['single', 'batch', 'animations', 'glue'] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
@@ -352,7 +360,7 @@ export default function App() {
                 ))}
               </div>
 
-              <LintSummary warnings={warnings} />
+              {tab !== 'glue' && <LintSummary warnings={warnings} />}
 
               {tab === 'single' && <PromptPreview prompt={prompt} issues={issues} onCopy={() => copy(prompt)} />}
               {tab === 'batch' && (
@@ -371,6 +379,11 @@ export default function App() {
                   onChange={(list) => setAnimationSettings((s) => ({ ...s, animations: list }))}
                   layout={layout}
                   onLayoutChange={(next) => setAnimationSettings((s) => ({ ...s, layout: next }))}
+                  output={output}
+                  onOutputChange={(next) => setAnimationSettings((s) => ({ ...s, output: next }))}
+                  frameSets={frameSets}
+                  hasReferenceImage={values.character.hasReferenceImage}
+                  onOpenGlue={() => setTab('glue')}
                   view={values.asset.view}
                   onUseSideView={() => form.setValue('asset.view', 'side-right', { shouldDirty: true })}
                   prompts={animationPrompts}
@@ -379,13 +392,20 @@ export default function App() {
                   onCopyAll={copyAllAnimations}
                 />
               )}
+              {/* Kept mounted so loaded frames survive switching tabs. */}
+              <div hidden={tab !== 'glue'}>
+                <GluePanel />
+              </div>
             </aside>
           </main>
         </FeedbackContext.Provider>
       </FormProvider>
 
       {/* Mobile: sticky copy bar */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
+      <div
+        hidden={tab === 'glue'}
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95"
+      >
         {tab === 'single' && (
           <CopyButton disabled={singleBlocked} onCopy={() => copy(prompt)} className="w-full py-2.5" />
         )}
@@ -401,7 +421,7 @@ export default function App() {
           <CopyButton
             disabled={animationsBlocked}
             onCopy={copyAllAnimations}
-            label={`Copy all (${animationPrompts.length})`}
+            label={`Copy all (${animationOutputCount})`}
             className="w-full py-2.5"
           />
         )}

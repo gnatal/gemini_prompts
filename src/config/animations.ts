@@ -1,4 +1,4 @@
-import type { AnimationSpec, FrameLayout } from '../types'
+import type { AnimationOutput, AnimationSpec, FrameLayout } from '../types'
 
 /**
  * Animation presets for the Animations tab. Each one becomes a sprite strip
@@ -215,6 +215,7 @@ export const ANIMATION_PRESETS: readonly AnimationSpec[] = [
 export const ANIMATION_PRESETS_VERSION = 3
 
 export const DEFAULT_FRAME_LAYOUT: FrameLayout = 'grid'
+export const DEFAULT_ANIMATION_OUTPUT: AnimationOutput = 'sheet'
 
 export function defaultAnimations(): AnimationSpec[] {
   return structuredClone(ANIMATION_PRESETS) as AnimationSpec[]

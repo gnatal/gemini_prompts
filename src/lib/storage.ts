@@ -2,6 +2,7 @@ import type { z } from 'zod'
 import {
   ANIMATION_PRESETS,
   ANIMATION_PRESETS_VERSION,
+  DEFAULT_ANIMATION_OUTPUT,
   DEFAULT_FRAME_LAYOUT,
   defaultAnimations,
 } from '../config/animations'
@@ -14,7 +15,7 @@ import {
   styleProfileSchema,
   type ExportFile,
 } from '../schemas'
-import type { AnimationSpec, AssetRequest, CharacterProfile, FrameLayout, StyleProfile } from '../types'
+import type { AnimationOutput, AnimationSpec, AssetRequest, CharacterProfile, FrameLayout, StyleProfile } from '../types'
 
 export const STORAGE_KEYS = {
   styles: 'apb:styles',
@@ -138,11 +139,12 @@ export function saveAssetDraft(asset: AssetRequest, storage = getStorage()): boo
 
 export interface AnimationSettings {
   layout: FrameLayout
+  output: AnimationOutput
   animations: AnimationSpec[]
 }
 
 export function defaultAnimationSettings(): AnimationSettings {
-  return { layout: DEFAULT_FRAME_LAYOUT, animations: defaultAnimations() }
+  return { layout: DEFAULT_FRAME_LAYOUT, output: DEFAULT_ANIMATION_OUTPUT, animations: defaultAnimations() }
 }
 
 /**
@@ -159,7 +161,7 @@ function refreshPresets(list: AnimationSpec[]): AnimationSpec[] {
 
 /**
  * The Animations tab settings. Version 1 stored a bare list; later versions store
- * `{ version, layout, animations }`. Falls back to the presets when nothing valid is stored.
+ * `{ version, layout, output, animations }`. Falls back to the presets when nothing valid is stored.
  */
 export function loadAnimations(storage: KeyValueStorage | null = getStorage()): AnimationSettings {
   if (!storage) return defaultAnimationSettings()
@@ -170,7 +172,8 @@ export function loadAnimations(storage: KeyValueStorage | null = getStorage()): 
   if (!list.length) return defaultAnimationSettings()
   const version = typeof stored.version === 'number' ? stored.version : 1
   const layout = stored.layout === 'row' || stored.layout === 'grid' ? stored.layout : DEFAULT_FRAME_LAYOUT
-  return { layout, animations: version < ANIMATION_PRESETS_VERSION ? refreshPresets(list) : list }
+  const output = stored.output === 'sheet' || stored.output === 'frames' ? stored.output : DEFAULT_ANIMATION_OUTPUT
+  return { layout, output, animations: version < ANIMATION_PRESETS_VERSION ? refreshPresets(list) : list }
 }
 
 export function saveAnimations(settings: AnimationSettings, storage = getStorage()): boolean {

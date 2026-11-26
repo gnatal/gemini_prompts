@@ -4,9 +4,11 @@ import { FIELD_HELP } from '../config/fieldHelp'
 import { gridFor } from '../config/assetPresets'
 import { VIEW_LABELS } from '../config/labels'
 import { type AnimationPrompt, isSideView, usableKeyPoses } from '../lib/buildAnimations'
+import type { AnimationFrames } from '../lib/buildFrames'
 import { newId } from '../lib/storage'
-import type { AnimationSpec, FrameLayout, View } from '../types'
+import type { AnimationOutput, AnimationSpec, FrameLayout, View } from '../types'
 import { buttonClass, inputClass } from './Field'
+import { FramePromptList } from './FramePromptList'
 import { InfoTip } from './InfoTip'
 import { PromptList } from './PromptList'
 import { type BlockingIssue, BlockingIssues } from './PromptPreview'
@@ -16,6 +18,13 @@ interface AnimationPanelProps {
   onChange: (animations: AnimationSpec[]) => void
   layout: FrameLayout
   onLayoutChange: (layout: FrameLayout) => void
+  output: AnimationOutput
+  onOutputChange: (output: AnimationOutput) => void
+  /** Frame prompts, used when `output` is 'frames'. */
+  frameSets: AnimationFrames[]
+  /** Whether the character section says a reference image will be attached. */
+  hasReferenceImage: boolean
+  onOpenGlue: () => void
   /** The view from the Asset section, shared by every animation. */
   view: View
   onUseSideView: () => void
@@ -41,6 +50,63 @@ function posesHint(spec: AnimationSpec): string {
   return `${lines} poses but ${spec.frames ?? 0} frames, so the poses are left out. Match the counts to use them.`
 }
 
+const OUTPUTS: { value: AnimationOutput; label: string; hint: string }[] = [
+  {
+    value: 'sheet',
+    label: 'One sheet per animation',
+    hint: 'One prompt draws every frame. Fast, but the model often copies the first half of a walk or run into the second, so the legs never alternate.',
+  },
+  {
+    value: 'frames',
+    label: 'One prompt per frame',
+    hint: 'Each pose is its own single-sprite prompt, which image models handle far better. Glue the results together in the Glue tab.',
+  },
+]
+
+function SegmentedControl<T extends string>({
+  name,
+  legend,
+  options,
+  value,
+  onChange,
+}: {
+  name: string
+  legend: string
+  options: { value: T; label: string; hint: string }[]
+  value: T
+  onChange: (value: T) => void
+}) {
+  return (
+    <fieldset className="flex flex-col gap-1">
+      <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">{legend}</legend>
+      <div className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
+        {options.map((o) => (
+          <label
+            key={o.value}
+            className={
+              'flex-1 cursor-pointer rounded-md px-3 py-1 text-center text-sm font-medium ' +
+              (value === o.value
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white')
+            }
+          >
+            <input
+              type="radio"
+              name={name}
+              value={o.value}
+              checked={value === o.value}
+              onChange={() => onChange(o.value)}
+              className="sr-only"
+            />
+            {o.label}
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500 dark:text-slate-400">{options.find((o) => o.value === value)?.hint}</p>
+    </fieldset>
+  )
+}
+
 const LAYOUTS: { value: FrameLayout; label: string; hint: string }[] = [
   { value: 'grid', label: 'Grid', hint: 'Equal square cells, e.g. 8 frames as 4×2. Easy to cut, and fits image models that cap the aspect ratio.' },
   { value: 'row', label: 'One row', hint: 'All frames side by side (N:1). Very wide sheets often come out squashed or unevenly spaced.' },
@@ -58,6 +124,11 @@ export function AnimationPanel({
   onChange,
   layout,
   onLayoutChange,
+  output,
+  onOutputChange,
+  frameSets,
+  hasReferenceImage,
+  onOpenGlue,
   view,
   onUseSideView,
   prompts,
@@ -98,38 +169,48 @@ export function AnimationPanel({
           <InfoTip label="animations" help={FIELD_HELP['animations.list']} />
         </div>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          One sprite strip prompt per animation. View, held items, background, lighting and exclusions come from the
-          Asset section. {enabledCount} of {animations.length} on.
+          View, held items, background, lighting and exclusions come from the Asset section. {enabledCount} of{' '}
+          {animations.length} on.
         </p>
       </div>
 
-      <fieldset className="flex flex-col gap-1">
-        <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">Sheet layout</legend>
-        <div className="flex gap-1 rounded-lg bg-slate-200 p-1 dark:bg-slate-800">
-          {LAYOUTS.map((l) => (
-            <label
-              key={l.value}
-              className={
-                'flex-1 cursor-pointer rounded-md px-3 py-1 text-center text-sm font-medium ' +
-                (layout === l.value
-                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white')
-              }
-            >
-              <input
-                type="radio"
-                name="animation-layout"
-                value={l.value}
-                checked={layout === l.value}
-                onChange={() => onLayoutChange(l.value)}
-                className="sr-only"
-              />
-              {l.label}
-            </label>
-          ))}
+      <SegmentedControl name="animation-output" legend="Output" options={OUTPUTS} value={output} onChange={onOutputChange} />
+
+      {output === 'sheet' && (
+        <SegmentedControl
+          name="animation-layout"
+          legend="Sheet layout"
+          options={LAYOUTS}
+          value={layout}
+          onChange={onLayoutChange}
+        />
+      )}
+
+      {output === 'frames' && (
+        <div
+          role="note"
+          aria-label="Frame workflow"
+          className="flex flex-col gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100"
+        >
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>Generate the idle as a single prompt and keep the best result as your reference image.</li>
+            <li>Attach that reference to every frame prompt.</li>
+            <li>Frames tagged “attach frame N too” build on an earlier frame, so generate the first half first.</li>
+            <li>Drop the finished frames into the Glue tab to line them up into one sheet.</li>
+          </ol>
+          {!hasReferenceImage && (
+            <p className="text-amber-800 dark:text-amber-300">
+              ⚠ Turn on “I will attach an approved reference image” in the Character section. Without one, separate
+              generations drift apart.
+            </p>
+          )}
+          <div>
+            <button type="button" className={buttonClass} onClick={onOpenGlue}>
+              Open the Glue tab
+            </button>
+          </div>
         </div>
-        <p className="text-xs text-slate-500 dark:text-slate-400">{LAYOUTS.find((l) => l.value === layout)?.hint}</p>
-      </fieldset>
+      )}
 
       {!isSideView(view) && (
         <div
@@ -286,16 +367,20 @@ export function AnimationPanel({
         </p>
       )}
 
-      <PromptList
-        items={prompts.map(({ spec, prompt }) => {
-          const title = `${spec.name.trim() || 'Untitled'} · ${layoutSummary(spec.frames, layout)}${spec.loop ? ', loop' : ''}`
-          return { title, prompt, copiedLabel: `Copied ${spec.name.trim() || 'animation'} prompt` }
-        })}
-        blocked={blocked}
-        testId="animation-prompt"
-        onCopy={onCopy}
-        onCopyAll={onCopyAll}
-      />
+      {output === 'frames' ? (
+        <FramePromptList sets={frameSets} blocked={blocked} onCopy={onCopy} onCopyAll={onCopyAll} />
+      ) : (
+        <PromptList
+          items={prompts.map(({ spec, prompt }) => {
+            const title = `${spec.name.trim() || 'Untitled'} · ${layoutSummary(spec.frames, layout)}${spec.loop ? ', loop' : ''}`
+            return { title, prompt, copiedLabel: `Copied ${spec.name.trim() || 'animation'} prompt` }
+          })}
+          blocked={blocked}
+          testId="animation-prompt"
+          onCopy={onCopy}
+          onCopyAll={onCopyAll}
+        />
+      )}
     </section>
   )
 }

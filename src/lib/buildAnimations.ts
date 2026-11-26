@@ -35,9 +35,10 @@ const NEAR_SIDE: Partial<Record<View, string>> = {
  * Without it, poses with no direction in them ("standing", "leans back") come out in
  * the model's default front view, so the character spins toward the camera mid-animation.
  */
-export function viewLockLine(view: View): string {
+export function viewLockLine(view: View, scope: 'sheet' | 'frame' = 'sheet'): string {
   const turn = isSideView(view) ? '; the character never turns toward the camera' : ''
-  return `View lock: ${VIEW_LABELS[view].toLowerCase()}, in every frame, including the first and the last${turn}`
+  const where = scope === 'sheet' ? ', in every frame, including the first and the last' : ', exactly as in the other frames'
+  return `View lock: ${VIEW_LABELS[view].toLowerCase()}${where}${turn}`
 }
 
 /** Keeps weapons and tools from popping in and out or switching hands between frames. */
@@ -69,7 +70,7 @@ export function animationAsset(asset: AssetRequest, spec: AnimationSpec, layout:
   }
 }
 
-function limbsLine(spec: AnimationSpec, view: View): string | null {
+export function limbsLine(spec: AnimationSpec, view: View): string | null {
   const text = [spec.motion, ...spec.keyPoses].join(' ')
   if (!NEAR_FAR_RE.test(text)) return null
   const side = NEAR_SIDE[view]
